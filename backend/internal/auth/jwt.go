@@ -61,6 +61,10 @@ func (t *Tokens) Verify(token string) (userID int64, version int32, err error) {
 		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
 		jwt.WithExpirationRequired(),
 		jwt.WithTimeFunc(t.now),
+		// Only the canonical base64url encoding: lenient decoding accepts variants of a token
+		// (the unused low bits of the last signature character), and the API keys per-session
+		// budgets by the token string.
+		jwt.WithStrictDecoding(),
 	)
 	if err != nil || !parsed.Valid {
 		return 0, 0, ErrInvalidToken

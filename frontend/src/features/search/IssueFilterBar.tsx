@@ -60,13 +60,21 @@ export function IssueFilterBar({ filters, onChange, onClear, project }: IssueFil
   const scope: Pick<Project, 'key' | 'type'> | null =
     project ?? (filters.project ? { key: filters.project, type: projects.data?.find((p) => p.key === filters.project)?.type ?? 'scrum' } : null)
   const scopeKey = scope?.key ?? null
+  // Kanban projects plan without sprints, so they get no Sprint menu, unless a sprint in the
+  // URL (a bookmark, or a project switched from Scrum) still narrows the results. The menu then
+  // shows it, and stays for as long as the bar shows that project: clearing the sprint from the
+  // open menu must not remove the button that focus goes back to.
+  const [sprintMenuKeptFor, setSprintMenuKeptFor] = useState<string | null>(null)
+  const keepSprintMenuFor =
+    scope?.type === 'kanban' && filters.sprint != null ? scopeKey : sprintMenuKeptFor === scopeKey ? scopeKey : null
+  if (keepSprintMenuFor !== sprintMenuKeptFor) setSprintMenuKeptFor(keepSprintMenuFor)
   return (
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Issue filters">
       <SearchBox value={filters.q} onCommit={(q, options) => onChange({ q }, options)} />
       {!project && (
         <ProjectFilter
           value={filters.project}
-          onChange={(key) => onChange({ project: key, ...withoutProjectScopedFilters(filters) })}
+          onChange={(picked) => onChange({ project: picked?.key ?? null, ...withoutProjectScopedFilters(filters, picked) })}
         />
       )}
       <TypeFilter value={filters.types} onChange={(types) => onChange({ types })} />
@@ -91,7 +99,7 @@ export function IssueFilterBar({ filters, onChange, onClear, project }: IssueFil
         <LabelFilter projectKey={scopeKey} value={filters.labelIds} onChange={(labelIds) => onChange({ labelIds })} />
       )}
       {scopeKey && <EpicFilter projectKey={scopeKey} value={filters.epic} onChange={(epic) => onChange({ epic })} />}
-      {scope?.type !== 'kanban' && (
+      {(scope?.type !== 'kanban' || keepSprintMenuFor != null) && (
         <SprintFilterMenu projectKey={scopeKey} value={filters.sprint} onChange={(sprint) => onChange({ sprint })} />
       )}
       <ResolvedFilter value={filters.resolved} onChange={(resolved) => onChange({ resolved })} />
@@ -162,7 +170,7 @@ function SearchBox({ value, onCommit }: { value: string; onCommit: (q: string, o
   )
 }
 
-function ProjectFilter({ value, onChange }: { value: string | null; onChange: (key: string | null) => void }) {
+function ProjectFilter({ value, onChange }: { value: string | null; onChange: (project: Project | null) => void }) {
   const projects = useProjects()
   const options = useMemo<ComboboxOption<string>[]>(
     () =>
@@ -181,7 +189,7 @@ function ProjectFilter({ value, onChange }: { value: string | null; onChange: (k
       multiple={false}
       options={options}
       selected={value ? [value] : []}
-      onChange={(keys) => onChange(keys[0] ?? null)}
+      onChange={(keys) => onChange(projects.data?.find((p) => p.key === keys[0]) ?? null)}
       loading={projects.isLoading}
       emptyText="No projects"
       width={300}

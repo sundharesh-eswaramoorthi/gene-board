@@ -58,6 +58,9 @@ function build() {
 const serverEnv = {
   ...process.env,
   DATABASE_URL: databaseUrl,
+  // Loopback only, like the default: set explicitly so a BIND_HOST exported by the shell
+  // cannot expose the API (or make it refuse the development JWT secret).
+  BIND_HOST: '127.0.0.1',
   PORT: port,
   CORS_ORIGINS: webOrigin,
   // Every test registers or signs in accounts from 127.0.0.1 in quick succession: the
@@ -69,7 +72,7 @@ await recreateDatabase()
 build()
 execFileSync(bin, ['migrate'], { env: serverEnv, stdio: 'inherit' })
 execFileSync(bin, ['seed'], { env: serverEnv, stdio: 'inherit' })
-log(`seeded; serving on :${port}`)
+log(`seeded; serving on 127.0.0.1:${port}`)
 
 // The server's log goes to e2e/.cache/api.log (global teardown fails the run when the API
 // logged an error: a 500 or a recovered panic). Error lines are also echoed to stderr, which

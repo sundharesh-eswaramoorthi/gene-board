@@ -68,7 +68,9 @@ func (s *Service) Board(ctx context.Context, userID int64, projectKey string) (d
 // Backlog returns the backlog page (SPEC §5): the active and planned sprints (active
 // first, planned by id) with their standard issues, and the backlog. Epics and subtasks
 // are never listed; everything is in rank order. Open issues left in a completed sprint
-// (e.g. reopened after the sprint closed) appear in the backlog, as in Jira.
+// (e.g. reopened after the sprint closed) appear in the backlog, as in Jira; done issues
+// of completed sprints are history and are left out, but done issues that never had a
+// sprint stay in the backlog.
 func (s *Service) Backlog(ctx context.Context, userID int64, projectKey string) (dto.Backlog, error) {
 	out := dto.Backlog{Sprints: []dto.BacklogSprint{}, Backlog: []dto.Issue{}}
 	err := s.inReadTx(ctx, func(q *db.Queries) error {

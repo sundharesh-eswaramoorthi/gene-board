@@ -1,6 +1,6 @@
 import { X } from 'lucide-react'
-import { useEffect, useRef, useState, type ChangeEvent, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react'
-import { IconButton, controlClasses, toast } from '@/components/ui'
+import { useEffect, useId, useLayoutEffect, useRef, type ChangeEvent, type InputHTMLAttributes, type KeyboardEvent, type ReactNode } from 'react'
+import { ChangedElsewhereNotice, IconButton, controlClasses, toast, useEditDraft } from '@/components/ui'
 import { cn } from '@/lib/cn'
 
 /**
@@ -42,8 +42,9 @@ export interface InlineEditInputProps {
 
 /**
  * Click-to-edit value for the details panel (story points, due date): shows the value like the
- * inline pickers; clicking swaps in an input. Enter or blur saves, Escape cancels, empty clears.
- * Date inputs open the browser's calendar, and a day picked there saves immediately.
+ * inline pickers; clicking swaps in an input. Enter or blur saves, Escape cancels, empty clears;
+ * leaving it untouched saves nothing, even when the value changed meanwhile. Date inputs open the
+ * browser's calendar, and a day picked there saves immediately.
  */
 export function InlineEditInput({
   id,
@@ -61,14 +62,16 @@ export function InlineEditInput({
   clearable = false,
   inputProps,
 }: InlineEditInputProps) {
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(value)
+  const { editing, draft, setDraft, touched, start: startEditing, stop, isEdit, changedElsewhere } = useEditDraft(value)
+  const noticeId = useId()
   const inputRef = useRef<HTMLInputElement>(null)
   const displayRef = useRef<HTMLButtonElement>(null)
   // Escape cancels (the input's blur must not save); Enter / Escape return focus to the value.
   const cancelled = useRef(false)
   const refocus = useRef(false)
   const lastKeyAt = useRef(0)
+  /** The value the calendar popup opened on: it keeps showing that day when the value changes live. */
+  const pickerValue = useRef(value)
 
   useEffect(() => {
     if (!editing) return
@@ -88,14 +91,20 @@ export function InlineEditInput({
     }
   }, [editing, type])
 
+  // An untouched number draft that follows someone else's change keeps its text selected (React
+  // rewriting the value moves the caret to the end), so the first keystroke still replaces it.
+  useLayoutEffect(() => {
+    if (editing && !touched && type === 'number') inputRef.current?.select()
+  }, [editing, touched, type, draft])
+
   const start = () => {
     if (busy) return
-    setDraft(value)
-    setEditing(true)
+    pickerValue.current = value
+    startEditing()
   }
 
   const finish = (save: boolean, raw = draft) => {
-    setEditing(false)
+    stop()
     // Keyboard users keep their place; a blur by clicking elsewhere leaves focus where it went.
     if (refocus.current) requestAnimationFrame(() => displayRef.current?.focus({ preventScroll: true }))
     if (!save) return
@@ -104,8 +113,9 @@ export function InlineEditInput({
       toast.error(badInputMessage)
       return
     }
+    // Unchanged since editing started (or equal to the current value): nothing to save.
+    if (!isEdit(raw)) return
     const next = raw.trim()
-    if (next === value) return
     const problem = validate?.(next) ?? null
     if (problem) {
       toast.error(problem)
@@ -121,7 +131,9 @@ export function InlineEditInput({
     if (type === 'date' && performance.now() - lastKeyAt.current > PICKED_WITHOUT_TYPING_MS) {
       cancelled.current = true // the input unmounts; its blur must not save a second time
       refocus.current = true
-      finish(true, next)
+      // Confirming the day the calendar opened on (e.g. Enter in the popup) changes nothing, even
+      // when someone else changed the date meanwhile.
+      finish(next !== pickerValue.current, next)
     }
   }
 
@@ -155,26 +167,36 @@ export function InlineEditInput({
   }
 
   if (editing) {
+    // Same element tree with or without the notice, so the focused input is never remounted.
     return (
-      <input
-        ref={inputRef}
-        id={id}
-        type={type}
-        aria-label={label}
-        value={draft}
-        onChange={onChange}
-        onKeyDown={onKeyDown}
-        onBlur={() => {
-          if (!cancelled.current) finish(true)
-        }}
-        {...inputProps}
-        className={cn(
-          controlClasses,
-          '-mx-2 h-8 w-[calc(100%+1rem)] px-2 text-sm',
-          type === 'number' &&
-            '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+      <>
+        <input
+          ref={inputRef}
+          id={id}
+          type={type}
+          aria-label={label}
+          aria-describedby={changedElsewhere ? noticeId : undefined}
+          value={draft}
+          onChange={onChange}
+          onKeyDown={onKeyDown}
+          onBlur={() => {
+            if (!cancelled.current) finish(true)
+          }}
+          {...inputProps}
+          className={cn(
+            controlClasses,
+            '-mx-2 h-8 w-[calc(100%+1rem)] px-2 text-sm',
+            type === 'number' &&
+              '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+          )}
+        />
+        {changedElsewhere && (
+          <ChangedElsewhereNotice id={noticeId}>
+            {value ? `Someone else changed this to ${displayText}.` : 'Someone else cleared this.'} Saving replaces it;
+            Esc keeps theirs.
+          </ChangedElsewhereNotice>
         )}
-      />
+      </>
     )
   }
 

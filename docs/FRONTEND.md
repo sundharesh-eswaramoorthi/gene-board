@@ -7,7 +7,7 @@ React 19 + TypeScript (strict) + Vite, Tailwind CSS v4 (`@tailwindcss/vite`), Re
 `date-fns`, `clsx` + `tailwind-merge`, `sonner` (toasts), `@fontsource-variable/inter`.
 
 The API contract is `docs/SPEC.md` (§4 types, §5 endpoints). Dev server on **5173** proxies
-`/api` (with `ws: true`) to `http://localhost:8484`.
+`/api` (with `ws: true`) to `http://127.0.0.1:8484` (the API listens on loopback only).
 
 Scripts in `frontend/package.json`: `dev`, `build` (`tsc -b && vite build`), `typecheck`
 (`tsc -b --noEmit` or equivalent), `lint` (optional), `preview`.
@@ -144,7 +144,7 @@ export function CreateIssueModal(props: { open: boolean; defaults: CreateIssueDe
 ### Shared components the foundation provides
 - `components/ui/`: `Button` (variants `primary | secondary | subtle | danger | link`, sizes `sm | md`, `loading`), `IconButton`, `Input`, `Textarea`, `Select` (native, styled), `Field` (label + hint + error), `Dialog` (Radix; `size: sm | md | lg | xl`), `ConfirmDialog`, `DropdownMenu`, `Popover`, `Tooltip`, `Tabs`, `Badge`, `Spinner`, `EmptyState`, `Skeleton`, `Kbd`, `toast` re-export.
 - `components/issue/`: `IssueTypeIcon`, `PriorityIcon`, `StatusLozenge`, `LabelChip`, `UserAvatar` (user | null → "Unassigned"), `IssueKeyLink` (opens modal), `EpicChip`, and pickers usable in forms *and* inline editing: `TypeSelect`, `StatusSelect(projectKey)`, `PrioritySelect`, `UserPicker(projectKey)` (project members, searchable, "Unassigned"), `LabelMultiSelect(projectKey)` (search + create new label), `SprintSelect(projectKey)` (planned/active + "Backlog"), `ParentPicker(projectKey, childType)` (epics for standard issues, standard issues for subtasks; searchable).
-- `components/layout/`: `AppLayout` (TopNav + `<Outlet/>`), `TopNav` (logo "Gene Board", Your work, Projects dropdown, Issues, search box → `/issues?q=` (an exact issue key opens that issue instead), **Create** button → `openCreateIssue({ projectKey: current })`, theme toggle + user menu with logout), `ProjectLayout` (sidebar + outlet; loads project, subscribes realtime, 404 state), `ProjectSidebar` (project avatar/name/type; nav: Board, Backlog (for Kanban the flat ranked list of §3), Epics, Issues, Activity, Project settings).
+- `components/layout/`: `AppLayout` (TopNav + `<Outlet/>`), `TopNav` (logo "Gene Board", Your work, Projects dropdown, Issues (below `sm` only Projects is shown: the logo links to Your work and the search button that replaces the search box below `md` to `/issues`), search box → `/issues?q=` (an exact issue key opens that issue instead), **Create** button → `openCreateIssue({ projectKey: current })`, theme toggle + user menu with logout), `ProjectLayout` (sidebar + outlet; loads project, subscribes realtime, 404 state), `ProjectSidebar` (project avatar/name/type; nav: Board, Backlog (for Kanban the flat ranked list of §3), Epics, Issues, Activity, Project settings).
 - `realtime/useProjectRealtime(key)`: websocket to `/api/projects/{key}/ws?token=…`, on message invalidates `['project', key]` + `['issues']` (debounced ~300ms), reconnect with exponential backoff, closes on unmount.
 
 ### Routes (`src/app/router.tsx`)

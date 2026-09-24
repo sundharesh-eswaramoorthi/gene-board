@@ -11,7 +11,7 @@ cmd/server/            `serve` (default: migrate + serve), `migrate`, `seed`, `h
 queries/*.sql          sqlc query files (one per resource)
 sqlc.yaml              sqlc config -> internal/db
 internal/
-  config/              env configuration (DATABASE_URL, TEST_DATABASE_URL, PORT, JWT_SECRET, JWT_TTL, CORS_ORIGINS, AUTH_RATE_LIMIT, GB_CONTAINER)
+  config/              env configuration (DATABASE_URL, TEST_DATABASE_URL, BIND_HOST, PORT, JWT_SECRET, JWT_TTL, CORS_ORIGINS, AUTH_RATE_LIMIT, TRUSTED_PROXIES, GB_CONTAINER)
   database/            pgxpool + goose migrations embedded with //go:embed
   db/                  sqlc-generated code — DO NOT EDIT (run `sqlc generate`)
   auth/                bcrypt PasswordHasher, HS256 JWT Tokens
@@ -33,11 +33,16 @@ PostgreSQL runs in Docker (`docker compose up -d db` from the repo root; host po
 databases `geneboard` and `geneboard_test`).
 
 ```sh
-go run ./cmd/server              # migrate the dev DB, then serve on :8484
+go run ./cmd/server              # migrate the dev DB, then serve on 127.0.0.1:8484
 go run ./cmd/server migrate      # only apply migrations
 go run ./cmd/server seed         # demo data (SPEC §6); does nothing if demo@geneboard.dev exists
-go run ./cmd/server healthcheck  # exit 0 if the server on $PORT answers /api/health
+go run ./cmd/server healthcheck  # exit 0 if the server on $BIND_HOST:$PORT answers /api/health
 ```
+
+Run from source, the API listens on 127.0.0.1 only: it signs sessions with the published
+development `JWT_SECRET`, so other machines must not reach it. To serve on the network, set
+`BIND_HOST=0.0.0.0` together with a `JWT_SECRET` of 32+ characters (the server refuses to
+start otherwise).
 
 The root `Makefile` wraps these (`make help`): `db-up`, `db-reset` (drop + recreate +
 migrate), `migrate`, `seed`, `backend`, `dev` (API + Vite), `test-backend`, `sqlc`, ...
@@ -55,21 +60,28 @@ docker compose --profile full up -d --build   # db + api (port 8484; stop a loca
 ```
 The `api` service (profile `full`) uses `backend/Dockerfile`: a static binary on
 `distroless/static:nonroot`, health-checked with `server healthcheck`. The image sets
-`GB_CONTAINER=1`: it never serves with the published development `JWT_SECRET` — without one it
-generates a random secret per start (sign-ins end on restart); a secret you set must be at least
-32 characters (`openssl rand -hex 32`). Compose publishes the API and the database on
-127.0.0.1 only.
+`GB_CONTAINER=1`: it listens on all interfaces of the container and never serves with the
+published development `JWT_SECRET` — without one it generates a random secret per start
+(sign-ins end on restart); a secret you set must be at least 32 characters
+(`openssl rand -hex 32`). Compose publishes the API and the database on 127.0.0.1 only; the
+web container's nginx reaches the API over the compose network and reports each browser's
+address in `X-Real-IP`, which the API trusts from private networks in container mode
+(`TRUSTED_PROXIES`) for sign-in throttling. If the image runs without such a proxy in front
+(e.g. `docker run -p 8484:8484` on a LAN host), set `TRUSTED_PROXIES=none`: otherwise LAN
+clients can pick their own throttling key.
 
 | Env var | Default |
 |---|---|
 | `DATABASE_URL` | `postgres://geneboard:geneboard@localhost:5442/geneboard?sslmode=disable` |
 | `TEST_DATABASE_URL` | `postgres://geneboard:geneboard@localhost:5442/geneboard_test?sslmode=disable` |
+| `BIND_HOST` | `127.0.0.1` (loopback only); container mode: all interfaces. A non-loopback `BIND_HOST` needs a `JWT_SECRET` of ≥ 32 characters |
 | `PORT` | `8484` |
-| `JWT_SECRET` | `dev-insecure-secret-change-me` (a warning is logged; container mode: random per start, or ≥ 32 characters) |
+| `JWT_SECRET` | `dev-insecure-secret-change-me` (a warning is logged; only accepted on a loopback `BIND_HOST`, and then requests must be addressed to localhost / a loopback IP — 403 otherwise, against DNS rebinding; container mode: random per start, or ≥ 32 characters) |
 | `JWT_TTL` | `168h` |
 | `CORS_ORIGINS` | `http://localhost:5173` (comma-separated; `*` allows any) |
-| `AUTH_RATE_LIMIT` | `20` sign-in / register requests per client address per minute (`0` = off) |
-| `GB_CONTAINER` | unset; `1` in the image (see `JWT_SECRET`) |
+| `AUTH_RATE_LIMIT` | `20` sign-in / register / password-change requests per client address per minute (`0` = off) |
+| `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128`; container mode adds `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7`. Reverse proxies (IPs / CIDR prefixes, or `none`) whose `X-Real-IP` / `X-Forwarded-For` names the client for auth throttling |
+| `GB_CONTAINER` | unset; `1` in the image (see `BIND_HOST`, `JWT_SECRET`, `TRUSTED_PROXIES`) |
 
 The server shuts down gracefully on SIGINT/SIGTERM (in-flight requests finish, websocket
 subscriptions are closed through `Hub.Close`).

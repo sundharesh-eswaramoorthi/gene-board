@@ -1,11 +1,11 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { GripVertical, Trash2 } from 'lucide-react'
-import { useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from 'react'
+import { useId, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type Ref } from 'react'
 import { useIssues } from '@/api/issues'
 import { useUpdateStatus } from '@/api/statuses'
 import type { Status, StatusCategory } from '@/api/types'
-import { EditableText } from '@/components/ui/EditableText'
+import { ChangedElsewhereNotice, EditableText, useEditDraft } from '@/components/ui/EditableText'
 import { IconButton } from '@/components/ui/IconButton'
 import { Input } from '@/components/ui/Input'
 import { Select } from '@/components/ui/Select'
@@ -73,7 +73,7 @@ export function ColumnRow({ projectKey, status, isAdmin, canDelete, onDelete, ha
   }
 
   const saveWip = (wipLimit: number | null) =>
-    update.mutate({ id: status.id, wipLimit }, { onError: (err) => toastError(err, 'Couldn’t save the WIP limit') })
+    update.mutateAsync({ id: status.id, wipLimit }).catch((err) => toastError(err, 'Couldn’t save the WIP limit'))
 
   return (
     <li
@@ -115,7 +115,7 @@ export function ColumnRow({ projectKey, status, isAdmin, canDelete, onDelete, ha
         <span className={cn('text-xs font-medium', meta.textClassName)}>{meta.label}</span>
       )}
       {isAdmin ? (
-        <WipLimitInput key={status.wipLimit ?? 'none'} value={status.wipLimit} columnName={status.name} onSave={saveWip} />
+        <WipLimitInput value={status.wipLimit} columnName={status.name} onSave={saveWip} />
       ) : (
         <span className="text-xs text-fg-muted">{status.wipLimit ?? 'No limit'}</span>
       )}
@@ -165,7 +165,9 @@ export function SortableColumnRow(props: Omit<ColumnRowProps, 'handle' | 'draggi
 
 /**
  * WIP limit editor: blank = no limit, otherwise a whole number ≥ 1. Saves on blur / Enter,
- * Escape restores the saved value. Remounted (keyed) when the saved value changes.
+ * Escape restores the saved value. Focusing it starts a draft ({@link useEditDraft}): until the
+ * admin types it follows another admin's change and saves nothing; a typed number is kept and
+ * the change is pointed out.
  */
 function WipLimitInput({
   value,
@@ -174,15 +176,20 @@ function WipLimitInput({
 }: {
   value: number | null
   columnName: string
-  onSave: (wipLimit: number | null) => void
+  /** Settles once the save is done (failures are reported by the caller). */
+  onSave: (wipLimit: number | null) => Promise<unknown>
 }) {
   const saved = value == null ? '' : String(value)
-  const [draft, setDraft] = useState(saved)
+  const { editing, draft, setDraft, start, stop, isEdit, changedElsewhere } = useEditDraft(saved)
+  const [saving, setSaving] = useState(false)
+  const noticeId = useId()
   const cancelled = useRef(false)
 
-  const commit = (input: HTMLInputElement) => {
+  const commit = async (input: HTMLInputElement) => {
     if (cancelled.current) {
       cancelled.current = false
+      input.value = saved // also drops unparseable text, which reads as '' like "no limit"
+      stop()
       return
     }
     const text = draft.trim()
@@ -191,10 +198,18 @@ function WipLimitInput({
     if (input.validity.badInput || (next !== null && (!Number.isInteger(next) || next < 1 || next > 9999))) {
       toast.error('The WIP limit must be a whole number from 1 to 9999, or empty for no limit')
       input.value = saved
-      setDraft(saved)
+      stop()
       return
     }
-    if (next !== value) onSave(next)
+    // Untouched, or the same number as before or as someone else's new limit: nothing to save.
+    if (!isEdit(next == null ? '' : String(next))) {
+      stop()
+      return
+    }
+    setSaving(true)
+    await onSave(next)
+    setSaving(false)
+    stop()
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -205,25 +220,36 @@ function WipLimitInput({
       e.preventDefault()
       e.stopPropagation()
       cancelled.current = true
-      setDraft(saved)
       e.currentTarget.blur()
     }
   }
 
+  // The notice gets its own grid row under the column's row, so the WIP cell keeps its width.
   return (
-    <Input
-      type="number"
-      inputMode="numeric"
-      min={1}
-      step={1}
-      size="sm"
-      placeholder="None"
-      aria-label={`WIP limit of ${columnName}`}
-      value={draft}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={(e) => commit(e.currentTarget)}
-      onKeyDown={onKeyDown}
-      className="tabular-nums"
-    />
+    <>
+      <Input
+        type="number"
+        inputMode="numeric"
+        min={1}
+        step={1}
+        size="sm"
+        placeholder="None"
+        aria-label={`WIP limit of ${columnName}`}
+        aria-describedby={changedElsewhere ? noticeId : undefined}
+        value={editing ? draft : saved}
+        disabled={saving}
+        onFocus={start}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => void commit(e.currentTarget)}
+        onKeyDown={onKeyDown}
+        className="tabular-nums"
+      />
+      {changedElsewhere && (
+        <ChangedElsewhereNotice id={noticeId} className="col-start-2 col-end-5 row-start-2 mb-0.5 justify-self-end">
+          {value == null ? 'Someone else removed the WIP limit.' : `Someone else changed the WIP limit to ${value}.`} Saving
+          replaces it; Esc keeps theirs.
+        </ChangedElsewhereNotice>
+      )}
+    </>
   )
 }

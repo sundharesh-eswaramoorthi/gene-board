@@ -14,6 +14,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -30,9 +31,14 @@ type Deps struct {
 	CORSOrigins []string
 	// WebsocketPingInterval overrides DefaultWebsocketPingInterval (tests use a short one).
 	WebsocketPingInterval time.Duration
-	// AuthRateLimit is how many POST /auth/login and /auth/register requests one client
-	// address may make per minute (see authThrottle). 0 turns throttling off (tests).
+	// AuthRateLimit is how many POST /auth/login and /auth/register requests (and password
+	// changes) one client address may make per minute (see authThrottle). 0 turns
+	// throttling off (tests).
 	AuthRateLimit int
+	// TrustedProxies are the peers whose X-Real-IP / X-Forwarded-For headers name the real
+	// client for that throttling (the reverse proxies in front of the API; see clientAddr).
+	// Nil trusts no peer.
+	TrustedProxies []netip.Prefix
 	// RequestReadTimeout and ResponseWriteTimeout bound sending the request and receiving
 	// the response on every route except the websocket (0 = the defaults below).
 	RequestReadTimeout   time.Duration
@@ -73,7 +79,7 @@ func NewRouter(d Deps) http.Handler {
 	}
 	h := &Handler{
 		svc: d.Service, logger: logger, corsOrigins: d.CORSOrigins, wsPingInterval: ping,
-		throttle: newAuthThrottle(d.AuthRateLimit),
+		throttle: newAuthThrottle(d.AuthRateLimit, d.TrustedProxies),
 	}
 	handle := httpx.Handle
 

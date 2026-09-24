@@ -3,8 +3,12 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type ProxyOptions } from 'vite'
 
-/** Backend origin; override with GB_API_URL (e.g. to point at a mock or remote API). */
-const apiTarget = process.env.GB_API_URL ?? 'http://localhost:8484'
+/**
+ * Backend origin; override with GB_API_URL (e.g. to point at a mock or remote API). The API
+ * listens on 127.0.0.1 only, so the default names that address: `localhost` may resolve to ::1
+ * first (macOS), which the API does not listen on.
+ */
+const apiTarget = process.env.GB_API_URL ?? 'http://127.0.0.1:8484'
 
 /** Everything under /api (REST + the project websocket) goes to the Go backend. */
 const apiProxy: Record<string, ProxyOptions> = {

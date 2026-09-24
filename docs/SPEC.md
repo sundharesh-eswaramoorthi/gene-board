@@ -51,14 +51,16 @@ Gene Board/
 |-----|---------|
 | `DATABASE_URL` | `postgres://geneboard:geneboard@localhost:5442/geneboard?sslmode=disable` |
 | `TEST_DATABASE_URL` | `postgres://geneboard:geneboard@localhost:5442/geneboard_test?sslmode=disable` |
+| `BIND_HOST` | `127.0.0.1` — the listen address (loopback only, so other machines cannot reach a server run from source); container mode: all interfaces. `0.0.0.0` or `::` listens on all interfaces, which requires a `JWT_SECRET` of ≥ 32 characters. (Not `HOST`, which some shells and dev tools export for their own use.) |
 | `PORT` | `8484` |
-| `JWT_SECRET` | `dev-insecure-secret-change-me` (log a warning when default is used). Container mode (`GB_CONTAINER=1`, set by the API image) never uses this published default: without `JWT_SECRET` a random secret is generated at start-up (sign-ins end on restart), and a set secret must be ≥ 32 characters |
+| `JWT_SECRET` | `dev-insecure-secret-change-me` (log a warning when default is used). It is published, so it is only accepted while `BIND_HOST` is a loopback address; a non-loopback `BIND_HOST` needs a secret of ≥ 32 characters. While it is in use the API also answers only requests addressed to a loopback host (`Host` localhost or a loopback IP; 403 `forbidden` otherwise), so a web page cannot reach it by rebinding its own host name to 127.0.0.1. Container mode (`GB_CONTAINER=1`, set by the API image) never uses this published default: without `JWT_SECRET` a random secret is generated at start-up (sign-ins end on restart), and a set secret must be ≥ 32 characters |
 | `JWT_TTL` | `168h` |
 | `CORS_ORIGINS` | `http://localhost:5173` (comma-separated) |
-| `AUTH_RATE_LIMIT` | `20` — `POST /auth/login` + `/auth/register` requests per client address per minute; `0` disables sign-in throttling (the e2e suite) |
-| `GB_CONTAINER` | unset — `1` in the API image (see `JWT_SECRET`) |
+| `AUTH_RATE_LIMIT` | `20` — `POST /auth/login` + `/auth/register` requests and password changes (`PATCH /auth/me`) per client address per minute; `0` disables auth throttling (the e2e suite) |
+| `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128` (loopback: the Vite dev proxy); container mode adds the private networks `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7` (the compose nginx). Comma-separated IPs / CIDR prefixes of the reverse proxies whose `X-Real-IP` (else last `X-Forwarded-For` hop) names the client for auth throttling, or `none`; any other peer is throttled by its own address. A container that clients reach directly (no proxy in front, e.g. `docker run -p 8484:8484` on a LAN host) should set `none`, or LAN clients pick their own throttling key |
+| `GB_CONTAINER` | unset — `1` in the API image (see `BIND_HOST`, `JWT_SECRET`, `TRUSTED_PROXIES`) |
 
-The Vite dev server (port 5173) proxies `/api` (including websockets) to `http://localhost:8484`.
+The Vite dev server (port 5173) proxies `/api` (including websockets) to `http://127.0.0.1:8484`.
 
 ---
 
@@ -102,7 +104,7 @@ One global rank per issue within a project (like Jira's rank). All lists — bac
 States: `planned` → `active` → `completed`.
 - Create: state `planned`; default name `"<KEY> Sprint <n>"` where n = (number of sprints ever created in project) + 1.
 - Start: only `planned`; requires `startDate` and `endDate` (end ≥ start); only one `active` sprint per project (409 otherwise).
-- Complete: only `active`. Issues in the sprint whose status category ≠ `done` ("open" issues) are moved to the target (`backlog`, an existing `planned` sprint of the same project, or a `new` sprint that gets created). Done issues remain in the completed sprint. Subtasks follow their parent (rule above). Sets `state=completed`, `completed_at=now()`.
+- Complete: only `active`. Issues in the sprint whose status category ≠ `done` ("open" issues) are moved to the target (`backlog`, an existing `planned` sprint of the same project, or a `new` sprint that gets created). Done issues remain in the completed sprint (and are not listed in the backlog; open issues later left in a completed sprint, e.g. reopened, are listed in the backlog). Subtasks follow their parent (rule above). Sets `state=completed`, `completed_at=now()`.
 - Delete: only `planned` sprints (409 otherwise); their issues go to the backlog.
 - Completed sprints are read-only (PATCH → 409).
 - Epics can never be put in a sprint (400).
@@ -157,7 +159,7 @@ After any successful mutation inside a project, the server publishes an event to
 | `forbidden` | 403 |
 | `not_found` | 404 |
 | `conflict` | 409 (also when a request collides with a concurrent change, e.g. a row it refers to was deleted meanwhile) |
-| `rate_limited` | 429 (too many sign-in attempts; `Retry-After` header says when to retry) |
+| `rate_limited` | 429 (too many sign-in or password-change attempts; `Retry-After` header says when to retry) |
 | `internal` | 500 (never leak internals; log them) |
 
 ### Success status codes
@@ -272,9 +274,9 @@ All paths below are prefixed with `/api`. `{key}` = project key (case-insensitiv
 | POST | `/auth/register` | `{ email, name, password }` (email valid, lower-cased; name 1–100; password ≥ 8 chars) | 201 `AuthResponse` (409 if email taken) |
 | POST | `/auth/login` | `{ email, password }` | 200 `AuthResponse` (401 `unauthorized` "Invalid email or password") |
 | GET | `/auth/me` | – | `User` |
-| PATCH | `/auth/me` | `{ name?, currentPassword?, newPassword? }` (password change needs both; wrong current → 400 validation_error on `currentPassword`) | `AuthResponse` — the account and a fresh token. A password change revokes every token issued before it (all sessions, the caller's too), so clients switch to the returned token. |
+| PATCH | `/auth/me` | `{ name?, currentPassword?, newPassword? }` (password change needs both; wrong current → 400 validation_error on `currentPassword`) | `AuthResponse` — the account and a token. A password change revokes every token issued before it (all sessions, the caller's too) and returns a fresh one, so clients switch to the returned token; any other update returns the caller's own token (only signing in or changing the password starts a session). Only the fields that change are written, so concurrent updates of the same account never undo each other. A request whose token a concurrent password change revoked answers 401 `unauthorized` and writes nothing; of two password changes racing each other, the later one answers 409 `conflict`, or 401 `unauthorized` when the earlier one had already committed as it read the account (either way it writes nothing; the earlier one already revoked its token). |
 
-Register and login are throttled (`AUTH_RATE_LIMIT` requests per client address per minute, and 10 failed logins per account, refilled at one a minute; a successful login clears the account's failures): over the limit they answer 429 `rate_limited` with `Retry-After`.
+Register, login and password changes are throttled: `AUTH_RATE_LIMIT` requests per client address per minute, shared by the three; 10 failed logins per account; and 10 wrong `currentPassword`s per session (access token). The failure budgets refill at one a minute and are cleared by a successful login / password change. Over a limit the endpoints answer 429 `rate_limited` with `Retry-After`. The wrong-password budget is per session so that whoever holds a stolen token cannot lock the owner out of the password change that revokes it: signing in again starts a session with its own budget. An attempt counts against a failure budget before the password is checked (and is given back when it fails for another reason), so concurrent guesses cannot exceed it. Name-only `PATCH /auth/me` requests are not throttled.
 
 ### Users
 | GET | `/users?query=&limit=20` | – | `UserSummary[]` — case-insensitive match on name or email (prefix/contains), max limit 50, ordered by name. Empty query returns first N users. By design any signed-in user can search the whole directory (the add-member picker must find people outside the caller's projects). |
@@ -375,7 +377,7 @@ Kanban projects: sprint endpoints return 400 `validation_error` ("Kanban project
 
 ### Board, backlog, epics
 | GET | `/projects/{key}/board` | – | `{ project: Project, statuses: Status[], sprint: Sprint \| null, issues: Issue[] }` (§2 Boards; issues by rank) |
-| GET | `/projects/{key}/backlog` | – | `{ sprints: { sprint: Sprint, issues: Issue[] }[], backlog: Issue[] }` — sprints = active + planned (active first, planned by id); issues exclude epics and subtasks; all by rank |
+| GET | `/projects/{key}/backlog` | – | `{ sprints: { sprint: Sprint, issues: Issue[] }[], backlog: Issue[] }` — sprints = active + planned (active first, planned by id); backlog = standard issues not in an active/planned sprint: those without a sprint (any status) and open issues left in completed sprints; done issues of completed sprints are excluded; issues exclude epics and subtasks; all by rank |
 | GET | `/projects/{key}/epics` | – | `EpicProgress[]` ordered by epic rank |
 
 ### Realtime

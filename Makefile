@@ -54,11 +54,11 @@ sqlc: ## Regenerate backend/internal/db from backend/queries and the migrations
 # --- run ---
 
 # Built and exec'ed (not `go run`) so Ctrl-C reaches the server itself, which shuts down
-# gracefully.
-backend: ## Run the API on :8484 (applies pending migrations first)
+# gracefully. It listens on 127.0.0.1 only (BIND_HOST): the development JWT secret is public.
+backend: ## Run the API on 127.0.0.1:8484 (applies pending migrations first)
 	cd $(BACKEND) && go build -o $(SERVER_BIN) ./cmd/server && exec ./$(SERVER_BIN)
 
-frontend: ## Run the Vite dev server on :5173 (proxies /api to :8484)
+frontend: ## Run the Vite dev server on :5173 (proxies /api to 127.0.0.1:8484)
 	cd $(FRONTEND) && npm run dev
 
 # The API runs from a freshly built binary (not `go run`) so that the signals sent by the

@@ -15,8 +15,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/server /usr/local/bin/server
 USER nonroot:nonroot
-# Container mode: never serve with the published development JWT secret (a random one is
-# generated when JWT_SECRET is unset; a set one must be 32+ characters).
+# Container mode: listen on all interfaces (the port mapping decides who connects), trust
+# X-Real-IP from private networks (the compose nginx; set TRUSTED_PROXIES=none when clients
+# reach the container directly), and never serve with the published development JWT secret
+# (a random one is generated when JWT_SECRET is unset; a set one must be 32+ characters).
 ENV PORT=8484 \
     GB_CONTAINER=1
 EXPOSE 8484

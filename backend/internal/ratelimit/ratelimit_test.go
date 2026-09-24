@@ -37,25 +37,28 @@ func TestAllowSpendsTheBurstThenRefills(t *testing.T) {
 	}
 }
 
-func TestTakeCheckAndReset(t *testing.T) {
-	l, now := fakeClock(1, 2)
-	l.Take("x")
-	l.Take("x")
-	if ok, _ := l.Check("x"); ok {
-		t.Fatal("no token left after two failures")
+func TestRefundAndReset(t *testing.T) {
+	l, _ := fakeClock(1, 2)
+	l.Allow("x")
+	l.Refund("x")
+	l.Refund("x") // never beyond the burst
+	for i := range 2 {
+		if ok, _ := l.Allow("x"); !ok {
+			t.Fatalf("request %d refused after the refund", i)
+		}
 	}
-	l.Take("x") // goes negative: the wait grows
-	if _, wait := l.Check("x"); wait != 2*time.Minute {
-		t.Fatalf("wait = %s, want 2m", wait)
+	if ok, wait := l.Allow("x"); ok || wait != time.Minute {
+		t.Fatalf("3rd request: ok=%v wait=%s, want refused for 1m", ok, wait)
 	}
-	*now = now.Add(2 * time.Minute)
-	if ok, _ := l.Check("x"); !ok {
-		t.Fatal("token expected after the wait")
+	l.Refund("x")
+	if ok, _ := l.Allow("x"); !ok {
+		t.Fatal("a refunded token must be usable")
 	}
-	l.Take("x")
 	l.Reset("x")
-	if ok, _ := l.Check("x"); !ok {
-		t.Fatal("reset restores the burst")
+	for i := range 2 {
+		if ok, _ := l.Allow("x"); !ok {
+			t.Fatalf("request %d refused: reset restores the burst", i)
+		}
 	}
 }
 

@@ -71,15 +71,14 @@ func TestRegisterLoginMe(t *testing.T) {
 func TestUpdateMe(t *testing.T) {
 	e := newTestEnv(t)
 	u := e.createUser("Grace")
+	nextTokenSecond()
 
 	renamed := decodeAs[dto.AuthResponse](t, e.do(http.MethodPatch, "/api/auth/me", u.Token, map[string]any{"name": " Grace Hopper "}), http.StatusOK)
-	if renamed.User.Name != "Grace Hopper" || renamed.Token == "" {
+	if renamed.User.Name != "Grace Hopper" || renamed.Token != u.Token {
 		t.Fatalf("rename: %+v", renamed)
 	}
-	// A rename revokes nothing: the old token and the new one both work.
-	for _, tok := range []string{u.Token, renamed.Token} {
-		expectStatus(t, e.do(http.MethodGet, "/api/auth/me", tok, nil), http.StatusOK)
-	}
+	// A rename revokes nothing (and starts no new session): the caller's token keeps working.
+	expectStatus(t, e.do(http.MethodGet, "/api/auth/me", u.Token, nil), http.StatusOK)
 	expectFieldError(t, e.do(http.MethodPatch, "/api/auth/me", u.Token, map[string]any{"name": nil}), "name")
 	expectFieldError(t, e.do(http.MethodPatch, "/api/auth/me", u.Token, map[string]any{"name": "  "}), "name")
 

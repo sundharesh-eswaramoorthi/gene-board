@@ -11,15 +11,22 @@ SELECT * FROM users WHERE id = $1;
 -- name: GetUserByEmail :one
 SELECT * FROM users WHERE email = $1;
 
--- UpdateUser writes the name and password hash. revoke_tokens increments token_version,
--- which invalidates every access token issued before (used when the password changes).
+-- UpdateUser changes the name and/or the password hash; a NULL argument keeps that column,
+-- so a concurrent update of the other column is never overwritten with a stale value. It
+-- writes only while token_version is still the caller's (a password change committed since
+-- revoked the caller's token), and a new password hash only while the stored one is still
+-- verified_password_hash (the hash the current password was checked against); otherwise no
+-- row is returned. A new password hash increments token_version, which invalidates every
+-- access token issued before.
 -- name: UpdateUser :one
 UPDATE users
-SET name          = @name,
-    password_hash = @password_hash,
-    token_version = token_version + CASE WHEN @revoke_tokens::bool THEN 1 ELSE 0 END,
+SET name          = COALESCE(sqlc.narg(name)::text, name),
+    password_hash = COALESCE(sqlc.narg(password_hash)::text, password_hash),
+    token_version = token_version + CASE WHEN sqlc.narg(password_hash)::text IS NULL THEN 0 ELSE 1 END,
     updated_at    = now()
 WHERE id = @id
+  AND token_version = @token_version
+  AND (sqlc.narg(password_hash)::text IS NULL OR password_hash = @verified_password_hash)
 RETURNING *;
 
 -- GetUserTokenVersion returns the token version access tokens of the user must carry.

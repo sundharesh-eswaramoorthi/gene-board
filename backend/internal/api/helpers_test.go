@@ -245,6 +245,14 @@ func (e *testEnv) createUser(name string) testUser {
 	return testUser{ID: res.User.ID, Name: name, Email: email, Token: res.Token}
 }
 
+// nextTokenSecond waits for the next wall-clock second. JWT times have a one-second
+// resolution, so a token issued within the second another was (same user and version) is
+// the very same string: a test asserting that a request did not mint a new token waits first,
+// or a fresh token would be indistinguishable from the old one.
+func nextTokenSecond() {
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)))
+}
+
 // createProject creates a Scrum project named "<key> Project" owned by u.
 func (e *testEnv) createProject(u testUser, key string) dto.Project {
 	e.t.Helper()

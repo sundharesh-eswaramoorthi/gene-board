@@ -3,7 +3,9 @@
 //
 // Conventions (read before adding a feature):
 //
-//   - Every exported method takes the acting user's id and returns dto values or an error.
+//   - Every exported method takes the acting user's id (UpdateMe takes the caller's access
+//     token instead: it needs the token's version and returns the token) and returns dto
+//     values or an error.
 //     Client-facing failures are *httpx.Error values (validation_error, not_found, ...);
 //     anything else is treated as an internal error by the HTTP layer.
 //   - Permissions: resolve the project/issue with projectByKey / projectByID / issueByKey /

@@ -34,8 +34,13 @@ UI playground in dev: **`/dev/ui`** renders every primitive and picker (source:
   `NavLink` whose `className` is a function inside `Tooltip`, `DropdownMenuItem asChild`,
   `Button asChild`, and so on. Use `Link` and compute the active state with `useMatch`.
 - Menu items fire **`onSelect`**, not `onClick`.
-- `Dialog` focuses the element marked **`data-autofocus`** first. Without one it focuses the
-  first input, textarea or select in the body. React's `autoFocus` does not work inside Radix dialogs.
+- `Dialog` focuses the enabled element marked **`data-autofocus`** first (a disabled one is
+  skipped). Without one it focuses the first enabled input, textarea or select in the body. React's
+  `autoFocus` does not work inside Radix dialogs.
+- `Dialog` and `ConfirmDialog` give focus back to what opened them when they close (for a menu
+  item, the menu's trigger). A dialog built on `DialogPrimitive` does the same with
+  `const returnFocus = useReturnFocus(fallback?)`: call `returnFocus.capture()` in
+  `onOpenAutoFocus` and pass `onCloseAutoFocus={returnFocus.restore}`.
 - `IssueKeyLink` and `EpicChip interactive` stop click and pointerdown propagation, so you can use
   them inside clickable or draggable cards and rows.
 - `useHotkey` single-key shortcuts are paused while a dialog, menu, popover or listbox is open, and while typing.
@@ -166,7 +171,10 @@ openCreateIssue({ projectKey: 'GB', type: 'subtask', parentId: 12, parentKey: 'G
 | `ProgressBar` | `value`, `max`, `tone?`, `size?` |
 | `SegmentedProgress` | `total`, `segments: { value, tone, label }[]`, for example done (success) and in progress (info) |
 | `Table`, `TableHeader`, `TableBody`, `TableRow` (`interactive?`, `selected?`), `TableHead` (`sort?: 'asc'\|'desc'\|null`, `onSort?`), `TableCell` | styled table |
-| `EditableText` | `value`, `onSave(v) => unknown \| Promise`, `label`, `placeholder?`, `disabled?`, `validate?`, `maxLength?`, `className?`, `data-testid?`. Enter or blur saves, Esc cancels |
+| `EditableText` | `value`, `onSave(v) => unknown \| Promise`, `label`, `placeholder?`, `disabled?`, `validate?`, `maxLength?`, `className?`, `data-testid?`. Enter or blur saves, Esc cancels; leaving it untouched saves nothing, even if the value changed meanwhile |
+| `useEditDraft(value)` | draft of a click-to-edit field whose value can change live → `{ editing, draft, setDraft, touched, start, stop, dirty, isEdit(text?), changedElsewhere }`. Edits are measured against the value editing started from; an untouched draft follows the live value, and once the user types (`setDraft`) it stops following it |
+| `ChangedElsewhereNotice` | `id?`, `className?`, `children`: warning line under an editor whose value someone else changed (`changedElsewhere`); point the input's `aria-describedby` at `id` |
+| `useReturnFocus(fallback?)` | `{ capture, restore }` for custom `DialogPrimitive` dialogs (see Gotchas) |
 | `EmptyState` | `icon?`, `title`, `description?`, `action?`, `size?: 'sm'\|'md'` |
 | `ErrorState` | `error?`, `title?`, `onRetry?`, `size?` |
 | `Spinner` (`size?: 'xs'\|'sm'\|'md'\|'lg'`), `CenteredSpinner`, `FullPageSpinner` | loading |
@@ -206,7 +214,7 @@ Inside a `Field` they are labelled automatically. They call `onChange` only when
 | `StatusSelect` | `projectKey`, `value: ID \| Status \| null` → `onChange(statusId, status)`. `variant` also accepts **`'button'`** (the prominent coloured status button). `statuses?` avoids a fetch |
 | `PrioritySelect` | `value: Priority` → `onChange(priority)` |
 | `UserPicker` | `projectKey`, `value: ID \| UserSummary \| null` → `onChange(userId \| null, user \| null)`. Options: `allowUnassigned? = true`, `unassignedLabel?`, `avatarSize?` |
-| `LabelMultiSelect` | `projectKey`, `value: ID[] \| Label[]` → `onChange(labelIds, labels)`. Options: `allowCreate? = true` (inline "Create “x”"), `commitMode?: 'immediate' \| 'onClose'`. Use **`onClose`** for inline editing, so one PATCH fires when the popover closes |
+| `LabelMultiSelect` | `projectKey`, `value: ID[] \| Label[]` → `onChange(labelIds, labels)`. Options: `allowCreate? = true` (inline "Create “x”"), `commitMode?: 'immediate' \| 'onClose'`. Use **`onClose`** for inline editing, so one PATCH fires when the popover closes: it applies only the labels picked in the popover to the live value, and closing without a change calls nothing |
 | `SprintSelect` | `projectKey`, `value: ID \| {id,name,state} \| null` (null = Backlog) → `onChange(sprintId \| null, sprint \| null)`. Options: `allowBacklog?`, `backlogLabel?` |
 | `ParentPicker` | `projectKey`, `childType`, `value: {id,key,summary,type} \| null` → `onChange(issue \| null)`. Epics for story, task and bug. Stories, tasks and bugs for subtasks (required, so no "None"). Disabled for epics |
 | `IssuePicker` | `value: {id,key,summary,type} \| null` → `onChange(issue \| null)`. Options: `projectKey?`, `types?`, `excludeIds?`, `allowNone?`, `noneLabel?`, `searchPlaceholder?` (server search on key or text, for links) |

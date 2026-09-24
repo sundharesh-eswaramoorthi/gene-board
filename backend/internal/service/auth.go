@@ -31,7 +31,20 @@ type UpdateMeInput struct {
 	NewPassword     *string                `json:"newPassword"`
 }
 
-var errInvalidCredentials = httpx.Unauthorized("Invalid email or password")
+// ChangesPassword reports whether the request asks for a password change (and so has the
+// current password verified).
+func (in UpdateMeInput) ChangesPassword() bool {
+	return in.CurrentPassword != nil || in.NewPassword != nil
+}
+
+var (
+	errInvalidCredentials = httpx.Unauthorized("Invalid email or password")
+	errAccountGone        = httpx.Unauthorized("Account no longer exists")
+)
+
+// ErrWrongCurrentPassword is UpdateMe's answer to a wrong currentPassword (the API counts
+// these like failed logins).
+var ErrWrongCurrentPassword = httpx.Validation("currentPassword", "is incorrect")
 
 // Register creates a user account and returns a token for it.
 func (s *Service) Register(ctx context.Context, in RegisterInput) (dto.AuthResponse, error) {
@@ -45,7 +58,7 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (dto.AuthRespo
 		return dto.AuthResponse{}, err
 	}
 
-	hash, err := s.hasher.Hash(in.Password)
+	hash, err := s.hasher.Hash(ctx, in.Password)
 	if err != nil {
 		return dto.AuthResponse{}, err
 	}
@@ -68,14 +81,14 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (dto.AuthResponse, e
 	user, err := s.q.GetUserByEmail(ctx, email)
 	if isNoRows(err) {
 		// Burn comparable CPU time so response timing does not reveal unknown e-mails.
-		_, _ = s.hasher.Verify(s.dummyHash(), in.Password)
+		_, _ = s.hasher.Verify(ctx, s.dummyHash(), in.Password)
 		s.logger.InfoContext(ctx, "login failed", "reason", "unknown email")
 		return dto.AuthResponse{}, errInvalidCredentials
 	}
 	if err != nil {
 		return dto.AuthResponse{}, fmt.Errorf("load user: %w", err)
 	}
-	ok, err := s.hasher.Verify(user.PasswordHash, in.Password)
+	ok, err := s.hasher.Verify(ctx, user.PasswordHash, in.Password)
 	if err != nil {
 		return dto.AuthResponse{}, err
 	}
@@ -90,7 +103,7 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (dto.AuthResponse, e
 func (s *Service) Me(ctx context.Context, userID int64) (dto.User, error) {
 	user, err := s.q.GetUserByID(ctx, userID)
 	if isNoRows(err) {
-		return dto.User{}, httpx.Unauthorized("Account no longer exists")
+		return dto.User{}, errAccountGone
 	}
 	if err != nil {
 		return dto.User{}, fmt.Errorf("load user: %w", err)
@@ -98,29 +111,49 @@ func (s *Service) Me(ctx context.Context, userID int64) (dto.User, error) {
 	return toUser(user), nil
 }
 
-// UpdateMe changes the caller's name and/or password and returns the account with a fresh
-// token. Changing the password revokes every token issued before (all sessions, including
-// the caller's), so the client must switch to the returned token.
-func (s *Service) UpdateMe(ctx context.Context, userID int64, in UpdateMeInput) (dto.AuthResponse, error) {
+// UpdateMe changes the name and/or password of the account token (the caller's access
+// token, already checked by the auth middleware) was issued for. Changing the password
+// revokes every token issued before (all sessions, including the caller's) and returns the
+// account with a fresh token, which the client must switch to. Any other update returns the
+// caller's own token: only the password yields a new session (the API budgets wrong current
+// passwords per session).
+//
+// Only the changed columns are written, and a new password only replaces the one the
+// current password was verified against: a concurrent PATCH /auth/me of the same account
+// can neither be reverted by this one nor revert it. Of two password changes racing each
+// other, the later one answers 409 (or 401 when the earlier one had already committed as it
+// read the account); either way it writes nothing. A request whose token a concurrent
+// password change revoked writes nothing and answers 401.
+func (s *Service) UpdateMe(ctx context.Context, token string, in UpdateMeInput) (dto.AuthResponse, error) {
+	userID, tokenVersion, err := s.tokens.Verify(token)
+	if err != nil {
+		return dto.AuthResponse{}, errInvalidToken
+	}
 	user, err := s.q.GetUserByID(ctx, userID)
 	if isNoRows(err) {
-		return dto.AuthResponse{}, httpx.Unauthorized("Account no longer exists")
+		return dto.AuthResponse{}, errAccountGone
 	}
 	if err != nil {
 		return dto.AuthResponse{}, fmt.Errorf("load user: %w", err)
 	}
+	if user.TokenVersion != tokenVersion { // revoked since the auth middleware checked it
+		return dto.AuthResponse{}, errInvalidToken
+	}
 
 	var fe httpx.FieldErrors
-	name := user.Name
+	var name *string // nil keeps the stored name
 	if in.Name.Set {
 		if in.Name.Null {
 			fe.Add("name", "must not be null")
 		} else {
-			name = strings.TrimSpace(in.Name.Value)
-			checkLength(&fe, "name", name, 1, maxUserName)
+			trimmed := strings.TrimSpace(in.Name.Value)
+			checkLength(&fe, "name", trimmed, 1, maxUserName)
+			if trimmed != user.Name {
+				name = &trimmed
+			}
 		}
 	}
-	changePassword := in.CurrentPassword != nil || in.NewPassword != nil
+	changePassword := in.ChangesPassword()
 	if changePassword {
 		if in.CurrentPassword == nil || *in.CurrentPassword == "" {
 			fe.Add("currentPassword", "is required to change the password")
@@ -135,25 +168,41 @@ func (s *Service) UpdateMe(ctx context.Context, userID int64, in UpdateMeInput) 
 		return dto.AuthResponse{}, err
 	}
 
-	hash := user.PasswordHash
+	var hash *string // nil keeps the stored password
 	if changePassword {
-		ok, err := s.hasher.Verify(user.PasswordHash, *in.CurrentPassword)
+		ok, err := s.hasher.Verify(ctx, user.PasswordHash, *in.CurrentPassword)
 		if err != nil {
 			return dto.AuthResponse{}, err
 		}
 		if !ok {
-			return dto.AuthResponse{}, httpx.Validation("currentPassword", "is incorrect")
+			return dto.AuthResponse{}, ErrWrongCurrentPassword
 		}
-		if hash, err = s.hasher.Hash(*in.NewPassword); err != nil {
+		newHash, err := s.hasher.Hash(ctx, *in.NewPassword)
+		if err != nil {
 			return dto.AuthResponse{}, err
 		}
+		hash = &newHash
 	}
-	if name == user.Name && !changePassword {
-		return s.authResponse(user)
+	if name == nil && hash == nil {
+		return dto.AuthResponse{Token: token, User: toUser(user)}, nil
 	}
-	updated, err := s.q.UpdateUser(ctx, db.UpdateUserParams{ID: user.ID, Name: name, PasswordHash: hash, RevokeTokens: changePassword})
-	if err != nil {
+	updated, err := s.q.UpdateUser(ctx, db.UpdateUserParams{
+		ID: user.ID, Name: name, PasswordHash: hash,
+		TokenVersion: tokenVersion, VerifiedPasswordHash: user.PasswordHash,
+	})
+	switch {
+	case isNoRows(err) && hash != nil:
+		// Another password change committed since the current password was verified (and
+		// revoked the caller's token).
+		return dto.AuthResponse{}, httpx.Conflict("Your password was just changed in another session. Sign in again with the new password.")
+	case isNoRows(err):
+		// A password change committed since the token was checked (or the account is gone).
+		return dto.AuthResponse{}, errInvalidToken
+	case err != nil:
 		return dto.AuthResponse{}, fmt.Errorf("update user: %w", err)
+	}
+	if hash == nil {
+		return dto.AuthResponse{Token: token, User: toUser(updated)}, nil
 	}
 	return s.authResponse(updated)
 }
@@ -167,10 +216,10 @@ func (s *Service) authResponse(user db.User) (dto.AuthResponse, error) {
 }
 
 // dummyHash is a bcrypt hash (at the configured cost) used to equalise login timing for
-// unknown accounts.
+// unknown accounts. It is computed once, whatever happens to the request that needs it first.
 func (s *Service) dummyHash() string {
 	s.dummyOnce.Do(func() {
-		s.dummy, _ = s.hasher.Hash("geneboard-timing-equaliser")
+		s.dummy, _ = s.hasher.Hash(context.Background(), "geneboard-timing-equaliser")
 	})
 	return s.dummy
 }

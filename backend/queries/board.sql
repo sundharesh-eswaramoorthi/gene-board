@@ -26,14 +26,17 @@ ORDER BY i.rank, i.id;
 -- backlog page: those without a sprint, those in active or planned sprints, and open
 -- issues left behind in completed sprints (e.g. reopened after the sprint closed), which
 -- Jira also lists in the backlog. Done issues of completed sprints are history and are
--- excluded.
+-- excluded. The exclusion must stay NULL-safe: with `NOT (i.sprint_id IN (...) AND ...)`
+-- a done issue without a sprint would evaluate to NULL and drop out as soon as the
+-- project has any completed sprint.
 -- name: ListBacklogIssues :many
 SELECT * FROM issues i
 WHERE i.project_id = @project_id
   AND i.type IN ('story', 'task', 'bug')
-  AND NOT (
-      i.sprint_id IN (SELECT sp.id FROM sprints sp WHERE sp.project_id = @project_id AND sp.state = 'completed')
-      AND i.status_id IN (SELECT s.id FROM statuses s WHERE s.project_id = @project_id AND s.category = 'done')
+  AND NOT EXISTS (
+      SELECT 1 FROM sprints sp, statuses s
+      WHERE sp.id = i.sprint_id AND sp.state = 'completed'
+        AND s.id = i.status_id AND s.category = 'done'
   )
 ORDER BY i.rank, i.id;
 

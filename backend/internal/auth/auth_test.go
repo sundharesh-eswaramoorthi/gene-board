@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -12,17 +13,18 @@ import (
 
 func TestPasswordHasher(t *testing.T) {
 	h := NewPasswordHasher(bcrypt.MinCost)
-	hash, err := h.Hash("correct horse")
+	ctx := context.Background()
+	hash, err := h.Hash(ctx, "correct horse")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := h.Verify(hash, "correct horse"); err != nil || !ok {
+	if ok, err := h.Verify(ctx, hash, "correct horse"); err != nil || !ok {
 		t.Fatalf("expected match, got ok=%v err=%v", ok, err)
 	}
-	if ok, err := h.Verify(hash, "wrong"); err != nil || ok {
+	if ok, err := h.Verify(ctx, hash, "wrong"); err != nil || ok {
 		t.Fatalf("expected mismatch, got ok=%v err=%v", ok, err)
 	}
-	if _, err := h.Verify("not-a-hash", "x"); err == nil {
+	if _, err := h.Verify(ctx, "not-a-hash", "x"); err == nil {
 		t.Fatal("expected error for malformed hash")
 	}
 	if cost, _ := bcrypt.Cost([]byte(hash)); cost != bcrypt.MinCost {
@@ -30,6 +32,44 @@ func TestPasswordHasher(t *testing.T) {
 	}
 	if (PasswordHasher{}).cost() != DefaultBcryptCost {
 		t.Fatal("zero value must use the default cost")
+	}
+}
+
+// TestPasswordHasherGivesUpWhenCancelled: a request whose client has gone away leaves the
+// bcrypt queue instead of waiting for a slot (and then burning one) for nobody.
+func TestPasswordHasherGivesUpWhenCancelled(t *testing.T) {
+	h := NewPasswordHasher(bcrypt.MinCost)
+	hash, err := h.Hash(context.Background(), "correct horse")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Every slot busy (a flood of sign-ins).
+	var releases []func()
+	for range cap(bcryptSlots) {
+		release, err := acquireBcrypt(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases = append(releases, release)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := h.Hash(ctx, "correct horse"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("hash while cancelled: %v", err)
+	}
+	if _, err := h.Verify(ctx, hash, "correct horse"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("verify while cancelled: %v", err)
+	}
+	deadline, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer stop()
+	if _, err := h.Verify(deadline, hash, "correct horse"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("verify past the deadline: %v", err)
+	}
+	for _, release := range releases {
+		release()
+	}
+	if ok, err := h.Verify(context.Background(), hash, "correct horse"); err != nil || !ok {
+		t.Fatalf("after the queue drained: ok=%v err=%v", ok, err)
 	}
 }
 
@@ -64,6 +104,15 @@ func tamper(tok string) string {
 	return tok[:i] + string(c) + tok[i+1:]
 }
 
+// nonCanonical returns tok with its last character swapped for one that differs only in the
+// two unused low bits of a 43-character base64url HMAC-SHA256 signature: a lenient decoder
+// reads the very same signature, so the variant would verify as another string for one token.
+func nonCanonical(tok string) string {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+	i := strings.IndexByte(alphabet, tok[len(tok)-1])
+	return tok[:len(tok)-1] + string(alphabet[i^1])
+}
+
 func TestTokensRejects(t *testing.T) {
 	tokens := NewTokens("secret", time.Hour)
 	good, _ := tokens.Issue(7, 0)
@@ -84,6 +133,7 @@ func TestTokensRejects(t *testing.T) {
 		"empty":     "",
 		"garbage":   "a.b.c",
 		"tampered":  tamper(good),
+		"nonCanon":  nonCanonical(good),
 		"expired":   old,
 		"otherKey":  other,
 		"algNone":   noneTok,

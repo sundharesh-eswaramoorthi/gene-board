@@ -234,7 +234,7 @@ export type ApiErrorCode =
   | 'not_found'
   | 'conflict'
   | 'internal'
-  /** 429 — too many sign-in attempts; the message says when to retry */
+  /** 429 — too many sign-in or password-change attempts; the message says when to retry */
   | 'rate_limited'
   /** client-side only: the request never reached the server */
   | 'network_error'

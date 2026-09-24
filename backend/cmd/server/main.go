@@ -1,9 +1,9 @@
 // Command server runs the Gene Board API.
 //
-//	server [serve]       run migrations, then serve HTTP on $PORT (default)
+//	server [serve]       run migrations, then serve HTTP on $BIND_HOST:$PORT (default)
 //	server migrate       apply database migrations and exit
 //	server seed          load demo data (see internal/seed)
-//	server healthcheck   exit 0 if the server on $PORT answers /api/health (container probe)
+//	server healthcheck   exit 0 if the server on $BIND_HOST:$PORT answers /api/health (container probe)
 package main
 
 import (
@@ -85,10 +85,10 @@ func run(ctx context.Context, args []string, logger *slog.Logger) error {
 	case cfg.JWTSecretGenerated:
 		logger.Warn("JWT_SECRET is not set; using a random secret for this run, so sign-ins end when the server restarts (set JWT_SECRET, 32+ characters, to keep them)")
 	case cfg.UsingDefaultJWTSecret():
-		logger.Warn("JWT_SECRET is not set; using the insecure development default")
+		logger.Warn("JWT_SECRET is not set; using the insecure development default (accepted only while BIND_HOST is a loopback address)")
 	}
 	if cfg.AuthRateLimit == 0 {
-		logger.Warn("AUTH_RATE_LIMIT=0: sign-in and registration are not throttled")
+		logger.Warn("AUTH_RATE_LIMIT=0: sign-in, registration and password changes are not throttled")
 	}
 	hub := realtime.NewHub(realtime.DefaultBuffer)
 	svc := service.New(service.Options{
@@ -111,11 +111,16 @@ func serve(ctx context.Context, cfg config.Config, svc *service.Service, hub *re
 	baseCtx, cancelBase := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancelBase()
 
+	handler := api.NewRouter(api.Deps{
+		Service: svc, Logger: logger, CORSOrigins: cfg.CORSOrigins,
+		AuthRateLimit: cfg.AuthRateLimit, TrustedProxies: cfg.TrustedProxies,
+	})
+	if cfg.UsingDefaultJWTSecret() { // only on loopback (config.Load): refuse DNS rebinding too
+		handler = loopbackHostsOnly(handler)
+	}
 	srv := &http.Server{
-		Addr: cfg.Addr(),
-		Handler: api.NewRouter(api.Deps{
-			Service: svc, Logger: logger, CORSOrigins: cfg.CORSOrigins, AuthRateLimit: cfg.AuthRateLimit,
-		}),
+		Addr:    cfg.Addr(),
+		Handler: handler,
 		// No ReadTimeout/WriteTimeout: they would also cut hijacked websocket connections.
 		// The router bounds every other request itself (httpx.Deadlines); request bodies
 		// are capped at 1 MB by httpx.DecodeJSON.
@@ -154,12 +159,12 @@ func serve(ctx context.Context, cfg config.Config, svc *service.Service, hub *re
 	return nil
 }
 
-// healthcheck probes GET /api/health of the server listening on cfg.Port. The runtime
+// healthcheck probes GET /api/health of the server listening on cfg.Addr(). The runtime
 // container image has no shell or curl, so its HEALTHCHECK runs `server healthcheck`.
 func healthcheck(ctx context.Context, cfg config.Config) error {
 	ctx, cancel := context.WithTimeout(ctx, healthcheckTimeout)
 	defer cancel()
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/health", cfg.Port)
+	url := "http://" + cfg.LocalAddr() + "/api/health"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("healthcheck: %w", err)

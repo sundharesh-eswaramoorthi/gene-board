@@ -192,13 +192,23 @@ export function CompleteSprintDialog({
         {hasOpen ? (
           <Field
             label="Move open issues to"
-            hint={planned.isError ? 'Couldn’t load planned sprints — you can still use the backlog or a new sprint.' : targetHint}
+            hint={
+              planned.isError
+                ? 'Couldn’t load planned sprints — you can still use the backlog or a new sprint.'
+                : waitingForSprints
+                  ? 'Loading planned sprints…'
+                  : targetHint
+            }
           >
             <Select
               value={target}
               onChange={(e) => setChoice(e.target.value as TargetValue)}
               options={options}
-              disabled={complete.isPending || waitingForSprints}
+              // Enabled while planned sprints load (submit waits for them): it takes the initial
+              // focus on the dialog's first open too. Its default is the first planned sprint, so
+              // it says it's loading rather than announce "Backlog" until that is known.
+              disabled={complete.isPending}
+              aria-busy={waitingForSprints || undefined}
               data-autofocus
               data-testid="complete-sprint-target"
             />

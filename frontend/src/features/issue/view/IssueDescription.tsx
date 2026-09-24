@@ -1,7 +1,7 @@
 import { Pencil } from 'lucide-react'
 import { useId, useState, type MouseEvent } from 'react'
 import type { IssueDetail } from '@/api/types'
-import { Button, useConfirm } from '@/components/ui'
+import { Button, ChangedElsewhereNotice, useConfirm, useEditDraft } from '@/components/ui'
 import { Markdown } from '@/components/ui/Markdown'
 import { MarkdownEditor } from '../shared/MarkdownEditor'
 import type { SaveIssue } from '../shared/useIssueSave'
@@ -11,28 +11,22 @@ import { useIssueView, useReportUnsaved } from './IssueViewContext'
 /**
  * Markdown description: rendered view (click it, or "Edit", to change it) and an editor with
  * Write / Preview tabs. ⌘/Ctrl+Enter saves, Escape cancels (asking first when there are edits).
+ * Edits are measured against the text editing started from: an untouched editor follows live
+ * changes and saves nothing, and a real edit says so when someone else changes the description.
  */
 export function IssueDescription({ issue, save }: { issue: IssueDetail; save: SaveIssue }) {
   const { canEdit } = useIssueView()
   const confirm = useConfirm()
   const headingId = useId()
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
 
   const description = issue.description
   const hasDescription = description.trim() !== ''
-  useReportUnsaved(editing && draft.trim() !== description.trim())
-
-  const start = () => {
-    setDraft(description)
-    setEditing(true)
-  }
-
-  const cancel = () => setEditing(false)
+  const { editing, draft, setDraft, start, stop, dirty, changedElsewhere } = useEditDraft(description)
+  useReportUnsaved(dirty)
 
   const cancelWithConfirm = async () => {
-    if (draft.trim() !== description.trim()) {
+    if (dirty) {
       const discard = await confirm({
         title: 'Discard changes?',
         description: 'Your changes to the description haven’t been saved.',
@@ -40,20 +34,19 @@ export function IssueDescription({ issue, save }: { issue: IssueDetail; save: Sa
       })
       if (!discard) return
     }
-    setEditing(false)
+    stop()
   }
 
   const submit = async () => {
     if (saving) return
-    const next = draft.trim()
-    if (next === description.trim()) {
-      setEditing(false)
+    if (!dirty) {
+      stop()
       return
     }
     setSaving(true)
-    const ok = await save({ description: next })
+    const ok = await save({ description: draft.trim() })
     setSaving(false)
-    if (ok) setEditing(false)
+    if (ok) stop()
   }
 
   // Clicking the rendered text edits it, except on links/controls or after selecting text.
@@ -81,14 +74,22 @@ export function IssueDescription({ issue, save }: { issue: IssueDetail; save: Sa
           submitHint="to save"
           onEscape={() => void cancelWithConfirm()}
           footer={
-            <div className="flex items-center gap-2">
-              <Button variant="primary" size="sm" loading={saving} onClick={() => void submit()}>
-                Save
-              </Button>
-              <Button variant="subtle" size="sm" disabled={saving} onClick={cancel}>
-                Cancel
-              </Button>
-            </div>
+            <>
+              {changedElsewhere && (
+                <ChangedElsewhereNotice className="mt-0">
+                  Someone else updated the description while you were editing. Saving replaces their version; Cancel
+                  keeps it.
+                </ChangedElsewhereNotice>
+              )}
+              <div className="flex items-center gap-2">
+                <Button variant="primary" size="sm" loading={saving} onClick={() => void submit()}>
+                  Save
+                </Button>
+                <Button variant="subtle" size="sm" disabled={saving} onClick={stop}>
+                  Cancel
+                </Button>
+              </div>
+            </>
           }
         />
       </div>

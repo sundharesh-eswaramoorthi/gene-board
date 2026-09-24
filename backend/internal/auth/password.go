@@ -2,6 +2,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
@@ -20,9 +21,16 @@ const MaxPasswordBytes = 72
 // occupying every CPU, so other requests stay responsive.
 var bcryptSlots = make(chan struct{}, max(1, runtime.GOMAXPROCS(0)/2))
 
-func acquireBcrypt() func() {
-	bcryptSlots <- struct{}{}
-	return func() { <-bcryptSlots }
+// acquireBcrypt waits for a bcrypt slot and returns its release function. It gives up with
+// ctx's error when ctx ends first: a request whose client has gone away must not keep its
+// place in the queue ahead of live sign-ins.
+func acquireBcrypt(ctx context.Context) (func(), error) {
+	select {
+	case bcryptSlots <- struct{}{}:
+		return func() { <-bcryptSlots }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("auth: wait for bcrypt: %w", ctx.Err())
+	}
 }
 
 // PasswordHasher hashes and verifies passwords with bcrypt.
@@ -41,9 +49,14 @@ func (h PasswordHasher) cost() int {
 	return h.Cost
 }
 
-// Hash returns the bcrypt hash of password.
-func (h PasswordHasher) Hash(password string) (string, error) {
-	defer acquireBcrypt()()
+// Hash returns the bcrypt hash of password. It fails with ctx's error if ctx ends while it
+// waits for a bcrypt slot.
+func (h PasswordHasher) Hash(ctx context.Context, password string) (string, error) {
+	release, err := acquireBcrypt(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	b, err := bcrypt.GenerateFromPassword([]byte(password), h.cost())
 	if err != nil {
 		return "", fmt.Errorf("auth: hash password: %w", err)
@@ -52,10 +65,15 @@ func (h PasswordHasher) Hash(password string) (string, error) {
 }
 
 // Verify reports whether password matches hash. A malformed hash is an error; a simple
-// mismatch returns (false, nil).
-func (h PasswordHasher) Verify(hash, password string) (bool, error) {
-	defer acquireBcrypt()()
-	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+// mismatch returns (false, nil). It fails with ctx's error if ctx ends while it waits for a
+// bcrypt slot.
+func (h PasswordHasher) Verify(ctx context.Context, hash, password string) (bool, error) {
+	release, err := acquireBcrypt(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer release()
+	err = bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	switch {
 	case err == nil:
 		return true, nil

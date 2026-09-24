@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useBlocker, type Location } from 'react-router'
 import { ISSUE_MODAL_PARAM } from '@/app/ModalsProvider'
-import { DialogPrimitive, useConfirm } from '@/components/ui'
+import { DialogPrimitive, useConfirm, useReturnFocus } from '@/components/ui'
 import { isTypingTarget } from '@/lib/hooks'
 import { IssueViewLoader } from './view/IssueViewLoader'
 import { createUnsavedEdits, LOCAL_ESCAPE_SELECTOR } from './view/IssueViewContext'
@@ -43,6 +43,14 @@ export function IssueDetailModal({ issueKey, onClose }: { issueKey: string; onCl
   // resulting navigation isn't blocked a second time.
   const leaving = useRef(false)
   const prompting = useRef(false)
+  // Closing returns focus to what opened the modal. Opened from the URL, or when its card was
+  // re-created (a status change moves it to another column): the issue's card or backlog row.
+  const openedKey = useRef(issueKey)
+  const returnFocus = useReturnFocus(() =>
+    document.querySelector<HTMLElement>(
+      `[data-testid="issue-card-${openedKey.current}"], [data-testid="backlog-row-${openedKey.current}"]`,
+    ),
+  )
 
   const confirmDiscard = useCallback(
     () =>
@@ -92,10 +100,12 @@ export function IssueDetailModal({ issueKey, onClose }: { issueKey: string; onCl
           ref={contentRef}
           aria-describedby={undefined}
           onOpenAutoFocus={(event) => {
+            returnFocus.capture()
             // Focus the dialog itself rather than its first control (the breadcrumb link).
             event.preventDefault()
             contentRef.current?.focus({ preventScroll: true })
           }}
+          onCloseAutoFocus={returnFocus.restore}
           onEscapeKeyDown={(event) => {
             if (handlesEscapeLocally(event)) event.preventDefault()
           }}

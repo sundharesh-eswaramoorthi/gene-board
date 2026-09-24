@@ -1,5 +1,5 @@
 // Package ratelimit implements a small in-memory token-bucket limiter keyed by strings
-// (client addresses, e-mail addresses). It is per process: good enough for one API
+// (client addresses, e-mail addresses, sessions). It is per process: good enough for one API
 // instance, and it forgets everything on restart.
 package ratelimit
 
@@ -52,24 +52,14 @@ func (l *Limiter) Allow(key string) (bool, time.Duration) {
 	return true, 0
 }
 
-// Check reports whether key has a token left without taking it, and otherwise how long
-// until the next one.
-func (l *Limiter) Check(key string) (bool, time.Duration) {
+// Refund gives back a token Allow took for key, never beyond the burst: a budget of failed
+// attempts takes its token before the attempt (so concurrent attempts cannot all pass a
+// check before any is counted) and refunds it when the attempt turns out not to count.
+func (l *Limiter) Refund(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	b := l.refill(key)
-	if b.tokens < 1 {
-		return false, l.wait(b)
-	}
-	return true, 0
-}
-
-// Take consumes a token for key even when none is left (the balance goes negative, which
-// extends the wait), e.g. to record a failed attempt.
-func (l *Limiter) Take(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.refill(key).tokens--
+	b.tokens = math.Min(l.burst, b.tokens+1)
 }
 
 // Reset forgets key, restoring its full burst.

@@ -27,8 +27,8 @@ import { UserMenu } from './UserMenu'
 
 const navItemClasses = (active: boolean) =>
   cn(
-    'relative inline-flex h-12 shrink-0 items-center px-1 text-sm font-medium transition-colors',
-    'after:absolute after:inset-x-1 after:bottom-0 after:h-0.5 after:rounded-t-full',
+    'relative inline-flex h-12 shrink-0 items-center text-sm font-medium transition-colors sm:px-1',
+    'after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-t-full sm:after:inset-x-1',
     active ? 'text-primary after:bg-primary' : 'text-fg-muted hover:text-fg',
   )
 
@@ -160,8 +160,9 @@ function GlobalSearch() {
 }
 
 /**
- * Global top bar: logo, Your work / Projects / Issues, the Create button (opens the create-issue
- * modal for the current project; shortcut `C`), issue search (`/`) and the user menu.
+ * Global top bar: logo, Your work / Projects / Issues (Projects only on phones), the Create
+ * button (opens the create-issue modal for the current project; shortcut `C`), issue search
+ * (`/`) and the user menu.
  */
 export function TopNav() {
   const { openCreateIssue } = useCreateIssueModal()
@@ -171,18 +172,22 @@ export function TopNav() {
 
   return (
     <header className="flex h-12 shrink-0 items-center gap-1 border-b border-border bg-surface px-3 sm:gap-2 sm:px-4">
-      <Link to="/" aria-label="Gene Board home" className="mr-1 flex items-center rounded-sm sm:mr-3">
+      <Link to="/" aria-label="Gene Board home" className="flex items-center rounded-sm sm:mr-3">
         <Logo hideWordmarkOnMobile />
       </Link>
       <nav aria-label="Main" className="flex min-w-0 items-center gap-0.5">
-        <NavLink to="/" end className={({ isActive }) => navItemClasses(isActive)}>
+        {/* Phones have room for Projects only, with tighter spacing, or the links spill over
+            Create: the logo leads to Your work and the search button to Issues. */}
+        <NavLink to="/" end className={({ isActive }) => cn(navItemClasses(isActive), 'hidden sm:inline-flex')}>
           <NavInner>Your work</NavInner>
         </NavLink>
         <ProjectsMenu />
-        <NavLink to="/issues" className={({ isActive }) => navItemClasses(isActive)}>
+        <NavLink to="/issues" className={({ isActive }) => cn(navItemClasses(isActive), 'hidden sm:inline-flex')}>
           <NavInner>Issues</NavInner>
         </NavLink>
       </nav>
+      {/* Positioned, so below ~310px (large system fonts, fold covers), where Projects still
+          spills out of the nav, Create is drawn over it and keeps its taps. */}
       <Button
         variant="primary"
         size="md"
@@ -190,11 +195,11 @@ export function TopNav() {
         onClick={create}
         data-testid="nav-create-issue"
         title="Create issue (C)"
-        className="ml-1 sm:ml-2"
+        className="relative sm:ml-2"
       >
         Create
       </Button>
-      <div className="ml-auto flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-1 sm:gap-2">
         <GlobalSearch />
         <UserMenu />
       </div>

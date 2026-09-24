@@ -22,7 +22,7 @@ The suite never touches the dev database or a developer's running servers:
   `.cache/api.log`, and global teardown fails the run if the API logged any error. Sign-in
   throttling is off there (`AUTH_RATE_LIMIT=0`): the tests register and sign in many accounts
   from one address.
-- **Vite on :5174** with `GB_API_URL=http://localhost:8491`, and its own dependency cache
+- **Vite on :5174** with `GB_API_URL=http://127.0.0.1:8491`, and its own dependency cache
   (`frontend/node_modules/.vite-e2e`).
 - `reuseExistingServer` is off: if either port is taken, the run stops instead of testing
   someone else's server.

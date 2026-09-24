@@ -34,6 +34,21 @@ function draftOf(project: Project): Draft {
   return { name: project.name, description: project.description, type: project.type, leadId: project.lead?.id ?? null }
 }
 
+/**
+ * `draft` after the project changed from `before` to `after` (someone else saved): each field the
+ * admin hasn't changed takes the new value, so saving never writes another field's old value back.
+ */
+function rebase(draft: Draft, before: Draft, after: Draft): Draft {
+  // Text is compared trimmed, like changesOf and the server: whitespace alone is no edit.
+  const sameText = (a: string, b: string) => a.trim() === b.trim()
+  return {
+    name: sameText(draft.name, before.name) ? after.name : draft.name,
+    description: sameText(draft.description, before.description) ? after.description : draft.description,
+    type: draft.type === before.type ? after.type : draft.type,
+    leadId: draft.leadId === before.leadId ? after.leadId : draft.leadId,
+  }
+}
+
 /** The PATCH body for what the draft changed (only changed fields, PATCH semantics). */
 function changesOf(draft: Draft, project: Project): UpdateProjectInput {
   const patch: UpdateProjectInput = {}
@@ -80,10 +95,10 @@ function DetailsForm({ project }: { project: Project }) {
   const [syncedProject, setSyncedProject] = useState(project)
   const [nameError, setNameError] = useState<string | null>(null)
 
-  // Someone else saved (realtime refresh): adopt their values unless there are local edits.
+  // Someone else saved (realtime refresh): adopt their values in the fields without local edits.
   if (syncedProject !== project) {
     setSyncedProject(project)
-    if (Object.keys(changesOf(draft, syncedProject)).length === 0) setDraft(draftOf(project))
+    setDraft(rebase(draft, draftOf(syncedProject), draftOf(project)))
   }
 
   const patch = changesOf(draft, project)

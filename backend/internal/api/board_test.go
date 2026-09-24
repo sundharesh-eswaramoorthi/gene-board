@@ -3,6 +3,8 @@ package api
 import (
 	"net/http"
 	"testing"
+
+	"geneboard/internal/dto"
 )
 
 func TestScrumBoard(t *testing.T) {
@@ -145,6 +147,53 @@ func TestBacklogGroupingAndOrder(t *testing.T) {
 		t.Fatalf("kanban backlog JSON: %s", res.Body)
 	}
 	expectKeys(t, e.backlog(u, "OPS").Backlog, k1.Key, k2.Key)
+}
+
+// Done issues that never had a sprint stay in the backlog once the project has completed
+// sprints (issue sprint_id NULL must not trip the completed-sprint exclusion); done issues
+// of completed sprints stay excluded. Kanban's flat list comes from the same query.
+func TestBacklogKeepsDoneIssuesWithoutSprint(t *testing.T) {
+	e := newTestEnv(t)
+	u := e.createUser("Owner")
+	e.createProject(u, "GB")
+	done := e.statusNamed(u, "GB", "Done")
+
+	open := e.newIssue(u, "GB", "task", "Open backlog task", nil)
+	doneEarly := e.newIssue(u, "GB", "task", "Done before any sprint closed", map[string]any{"statusId": done.ID})
+	sp := e.createSprint(u, "GB", nil)
+	history := e.newIssue(u, "GB", "story", "Done in the sprint", map[string]any{"sprintId": sp.ID, "statusId": done.ID})
+	leftover := e.newIssue(u, "GB", "bug", "Open in the sprint", map[string]any{"sprintId": sp.ID})
+	before := e.backlog(u, "GB")
+	if len(before.Sprints) != 1 {
+		t.Fatalf("planned sprint section: %+v", before.Sprints)
+	}
+	expectKeys(t, before.Sprints[0].Issues, history.Key, leftover.Key)
+	expectKeys(t, before.Backlog, open.Key, doneEarly.Key)
+
+	e.startSprint(u, sp.ID, "2026-09-01", "2026-09-14")
+	e.completeSprint(u, sp.ID, map[string]any{"target": "backlog"})
+	// Resolved straight from the backlog after the sprint closed.
+	doneLater := e.newIssue(u, "GB", "bug", "Done after the sprint closed", nil)
+	e.moveIssue(u, doneLater.Key, map[string]any{"statusId": done.ID})
+
+	bl := e.backlog(u, "GB")
+	if len(bl.Sprints) != 0 {
+		t.Fatalf("no active or planned sprints: %+v", bl.Sprints)
+	}
+	expectKeys(t, bl.Backlog, open.Key, doneEarly.Key, leftover.Key, doneLater.Key)
+	if got := e.getIssue(u, history.Key); got.Sprint == nil || got.Sprint.ID != sp.ID || got.Status.ID != done.ID {
+		t.Fatalf("history issue must stay done in the completed sprint: %+v", got)
+	}
+
+	// Kanban (switched from Scrum, so the completed sprint is still there): same rules.
+	decodeAs[dto.Project](t, e.do(http.MethodPatch, "/api/projects/GB", u.Token, map[string]any{"type": "kanban"}), http.StatusOK)
+	kb := e.backlog(u, "GB")
+	if len(kb.Sprints) != 0 {
+		t.Fatalf("kanban backlog sprints: %+v", kb.Sprints)
+	}
+	expectKeys(t, kb.Backlog, open.Key, doneEarly.Key, leftover.Key, doneLater.Key)
+	doneKanban := e.newIssue(u, "GB", "task", "Done on the Kanban board", map[string]any{"statusId": done.ID})
+	expectKeys(t, e.backlog(u, "GB").Backlog, open.Key, doneEarly.Key, leftover.Key, doneLater.Key, doneKanban.Key)
 }
 
 func TestEpicsProgress(t *testing.T) {

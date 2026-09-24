@@ -26,6 +26,56 @@ export function isToastEvent(event: Event): boolean {
   return target instanceof Element && target.closest('[data-sonner-toaster]') != null
 }
 
+/**
+ * Where focus goes back to for `element` (what had focus when a dialog opened). A menu closes as
+ * its item opens a dialog, so for a menu item that is the button that opened the menu.
+ */
+function focusOrigin(element: Element | null): HTMLElement | null {
+  let origin = element
+  let menu = origin?.closest('[role=menu]')
+  while (menu) {
+    const trigger = document.getElementById(menu.getAttribute('aria-labelledby') ?? '')
+    if (!trigger || menu.contains(trigger)) break
+    origin = trigger
+    menu = trigger.closest('[role=menu]')
+  }
+  return origin instanceof HTMLElement ? origin : null
+}
+
+/**
+ * Gives focus back to what opened a dialog when it closes. Radix only refocuses a `Trigger`, and
+ * our dialogs are opened from state, so without this focus falls to `<body>`. Call `capture` in
+ * `onOpenAutoFocus` (before focus moves into the dialog) and pass `restore` as `onCloseAutoFocus`.
+ *
+ * When the opener is gone (e.g. deleted by the dialog), focus goes to `fallback()`, else to the
+ * opener's closest remaining container that takes focus (the dialog underneath, `<main>`).
+ */
+export function useReturnFocus(fallback?: () => HTMLElement | null) {
+  // The opener, then its ancestors up to <body>.
+  const origin = useRef<HTMLElement[]>([])
+  const capture = () => {
+    const chain: HTMLElement[] = []
+    for (let el = focusOrigin(document.activeElement); el && el !== document.body; el = el.parentElement) chain.push(el)
+    origin.current = chain
+  }
+  const restore = (event: Event) => {
+    event.preventDefault()
+    const main = document.querySelector<HTMLElement>('main')
+    // Focus has already moved on (another dialog opened, the next page focused a field). Not when
+    // it's on `<main>`, the last resort: a dialog that closed along with this one (a confirm on
+    // top, whose opener went with this dialog) may have put it there.
+    const active = document.activeElement
+    if (active && active !== document.body && active !== main && active.isConnected) return
+    const [opener, ...ancestors] = origin.current
+    for (const el of [opener, fallback?.(), ...ancestors, main]) {
+      if (!el?.isConnected) continue
+      el.focus()
+      if (document.activeElement === el) return
+    }
+  }
+  return { capture, restore }
+}
+
 /** Dialog width preset. */
 export type DialogSize = 'sm' | 'md' | 'lg' | 'xl'
 
@@ -65,8 +115,8 @@ export interface DialogProps {
    */
   onEscapeKeyDown?: (event: KeyboardEvent) => void
   /**
-   * Override initial focus. By default focus goes to the element marked `data-autofocus`, else
-   * the first enabled input/textarea/select in the body, else the first focusable element.
+   * Override initial focus. By default focus goes to the enabled element marked `data-autofocus`,
+   * else the first enabled input/textarea/select in the body, else the first focusable element.
    */
   onOpenAutoFocus?: (event: Event) => void
   className?: string
@@ -76,7 +126,8 @@ export interface DialogProps {
 
 /**
  * Modal dialog (Radix) with header, scrollable body and footer. Sizes: sm 400, md 560,
- * lg 720, xl 1080px. Pass `onSubmit` to make it a form dialog.
+ * lg 720, xl 1080px. Pass `onSubmit` to make it a form dialog. Closing it gives focus back to
+ * what opened it ({@link useReturnFocus}).
  */
 export function Dialog({
   open,
@@ -98,15 +149,20 @@ export function Dialog({
   'data-testid': testId,
 }: DialogProps) {
   const contentRef = useRef<HTMLDivElement>(null)
+  const returnFocus = useReturnFocus()
   const handleOpenAutoFocus = (event: Event) => {
+    returnFocus.capture()
     if (onOpenAutoFocus) return onOpenAutoFocus(event)
-    const target = contentRef.current?.querySelector<HTMLElement>(
-      '[data-autofocus], [data-dialog-body] :is(input:not([type=hidden]):not(:disabled), textarea:not(:disabled), select:not(:disabled))',
-    )
-    if (target) {
-      event.preventDefault()
-      target.focus()
-    }
+    const content = contentRef.current
+    const target =
+      content?.querySelector<HTMLElement>('[data-autofocus]:not(:disabled)') ??
+      content?.querySelector<HTMLElement>(
+        '[data-dialog-body] :is(input:not([type=hidden]):not(:disabled), textarea:not(:disabled), select:not(:disabled))',
+      )
+    target?.focus()
+    // Otherwise Radix focuses the first focusable element (or the dialog): focus must not stay
+    // on the page behind.
+    if (target && document.activeElement === target) event.preventDefault()
   }
 
   const inner = (
@@ -153,6 +209,7 @@ export function Dialog({
           {...(!description && { 'aria-describedby': undefined })}
           ref={contentRef}
           onOpenAutoFocus={handleOpenAutoFocus}
+          onCloseAutoFocus={returnFocus.restore}
           onEscapeKeyDown={(e) => {
             if (preventClose || isLocalEscape(e)) {
               e.preventDefault()

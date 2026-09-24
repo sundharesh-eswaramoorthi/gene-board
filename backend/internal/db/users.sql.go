@@ -166,29 +166,38 @@ func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]Use
 
 const updateUser = `-- name: UpdateUser :one
 UPDATE users
-SET name          = $1,
-    password_hash = $2,
-    token_version = token_version + CASE WHEN $3::bool THEN 1 ELSE 0 END,
+SET name          = COALESCE($1::text, name),
+    password_hash = COALESCE($2::text, password_hash),
+    token_version = token_version + CASE WHEN $2::text IS NULL THEN 0 ELSE 1 END,
     updated_at    = now()
-WHERE id = $4
+WHERE id = $3
+  AND token_version = $4
+  AND ($2::text IS NULL OR password_hash = $5)
 RETURNING id, email, name, password_hash, created_at, updated_at, token_version
 `
 
 type UpdateUserParams struct {
-	Name         string `db:"name"`
-	PasswordHash string `db:"password_hash"`
-	RevokeTokens bool   `db:"revoke_tokens"`
-	ID           int64  `db:"id"`
+	Name                 *string `db:"name"`
+	PasswordHash         *string `db:"password_hash"`
+	ID                   int64   `db:"id"`
+	TokenVersion         int32   `db:"token_version"`
+	VerifiedPasswordHash string  `db:"verified_password_hash"`
 }
 
-// UpdateUser writes the name and password hash. revoke_tokens increments token_version,
-// which invalidates every access token issued before (used when the password changes).
+// UpdateUser changes the name and/or the password hash; a NULL argument keeps that column,
+// so a concurrent update of the other column is never overwritten with a stale value. It
+// writes only while token_version is still the caller's (a password change committed since
+// revoked the caller's token), and a new password hash only while the stored one is still
+// verified_password_hash (the hash the current password was checked against); otherwise no
+// row is returned. A new password hash increments token_version, which invalidates every
+// access token issued before.
 func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, updateUser,
 		arg.Name,
 		arg.PasswordHash,
-		arg.RevokeTokens,
 		arg.ID,
+		arg.TokenVersion,
+		arg.VerifiedPasswordHash,
 	)
 	var i User
 	err := row.Scan(

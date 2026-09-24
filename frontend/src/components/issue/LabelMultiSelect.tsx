@@ -22,7 +22,9 @@ export interface LabelMultiSelectProps extends PickerCommonProps {
   /**
    * `immediate` (default, for forms): every toggle calls onChange.
    * `onClose` (for inline editing): changes are collected and onChange fires once when the
-   * popover closes — one PATCH instead of one per click.
+   * popover closes — one PATCH instead of one per click. Only the labels the user picked or
+   * unpicked change: they apply to the live `value`, so a label someone else added or removed
+   * meanwhile stays that way, and closing without a change calls nothing.
    */
   commitMode?: 'immediate' | 'onClose'
 }
@@ -32,6 +34,38 @@ function sameSet(a: readonly ID[], b: readonly ID[]): boolean {
   const s = new Set(a)
   return b.every((x) => s.has(x))
 }
+
+/**
+ * A label the user picked or unpicked: whether it was selected in the live value when they first
+ * did (`from`), and their choice (`to`).
+ */
+interface LabelPick {
+  from: boolean
+  to: boolean
+}
+
+/** `ids` with the user's picks applied. */
+function withPicks(ids: readonly ID[], picks: ReadonlyMap<ID, LabelPick>): ID[] {
+  const out = ids.filter((id) => picks.get(id)?.to !== false)
+  for (const [id, { to }] of picks) if (to && !ids.includes(id)) out.push(id)
+  return out
+}
+
+/**
+ * `picks` after the user toggles `labelId` in the picker showing `ids` with the picks applied. A
+ * pick the user undoes is forgotten, so a label they checked and unchecked again takes whatever
+ * someone else did to it meanwhile.
+ */
+function togglePick(picks: ReadonlyMap<ID, LabelPick>, ids: readonly ID[], labelId: ID): ReadonlyMap<ID, LabelPick> {
+  const next = new Map(picks)
+  const from = picks.get(labelId)?.from ?? ids.includes(labelId)
+  const to = !withPicks(ids, picks).includes(labelId)
+  if (to === from) next.delete(labelId)
+  else next.set(labelId, { from, to })
+  return next
+}
+
+const NO_PICKS: ReadonlyMap<ID, LabelPick> = new Map()
 
 /** Multi-select for project labels with search and inline creation of new labels. */
 export function LabelMultiSelect({
@@ -57,7 +91,8 @@ export function LabelMultiSelect({
   const [created, setCreated] = useState<Label[]>([])
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
   const open = openProp ?? uncontrolledOpen
-  const [draft, setDraft] = useState<ID[] | null>(null)
+  /** `onClose` mode: what the user picked while the popover is open. */
+  const [picks, setPicks] = useState(NO_PICKS)
   const [query, setQuery] = useState('')
 
   const valueIds = useMemo(() => value.map((v) => (typeof v === 'number' ? v : v.id)), [value])
@@ -69,7 +104,7 @@ export function LabelMultiSelect({
     return map
   }, [value, labelsQuery.data, created])
 
-  const selectedIds = commitMode === 'onClose' && draft ? draft : valueIds
+  const selectedIds = commitMode === 'onClose' && picks.size > 0 ? withPicks(valueIds, picks) : valueIds
 
   const emit = (ids: ID[], extra: readonly Label[] = []) => {
     const map = new Map(known)
@@ -81,18 +116,17 @@ export function LabelMultiSelect({
     ids.includes(labelId) ? ids.filter((x) => x !== labelId) : [...ids, labelId]
 
   const toggle = (labelId: ID, extra?: readonly Label[]) => {
-    if (commitMode === 'onClose') setDraft((d) => toggleIn(d ?? valueIds, labelId))
+    if (commitMode === 'onClose') setPicks((p) => togglePick(p, valueIds, labelId))
     else emit(toggleIn(valueIds, labelId), extra)
   }
 
   const setOpen = (next: boolean) => {
     if (next) {
-      setDraft(valueIds)
       setQuery('')
-    } else {
-      if (commitMode === 'onClose' && draft && !sameSet(draft, valueIds)) emit(draft)
-      setDraft(null)
+    } else if (commitMode === 'onClose' && !sameSet(selectedIds, valueIds)) {
+      emit(selectedIds)
     }
+    setPicks(NO_PICKS)
     if (openProp === undefined) setUncontrolledOpen(next)
     onOpenChange?.(next)
   }

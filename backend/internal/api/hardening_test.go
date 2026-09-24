@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -109,12 +112,15 @@ func authRequest(h http.Handler, path, peer, realIP, body string) *httptest.Resp
 	return rec
 }
 
+// loopbackProxies is the default TRUSTED_PROXIES outside container mode.
+var loopbackProxies = []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")}
+
 // TestAuthThrottling (SEC-3): sign-in and registration are rate limited per client address,
 // and failed logins per account, answering 429 rate_limited with Retry-After.
 func TestAuthThrottling(t *testing.T) {
 	e := newTestEnv(t)
 	victim := e.createUser("Victim")
-	h := NewRouter(Deps{Service: e.svc, Logger: discardLogger, CORSOrigins: []string{testCORSOrigin}, AuthRateLimit: 3})
+	h := NewRouter(Deps{Service: e.svc, Logger: discardLogger, CORSOrigins: []string{testCORSOrigin}, AuthRateLimit: 3, TrustedProxies: loopbackProxies})
 	wrong := fmt.Sprintf(`{"email":%q,"password":"wrong-password"}`, victim.Email)
 
 	// Per client address: 3 requests a minute, then 429.
@@ -135,9 +141,20 @@ func TestAuthThrottling(t *testing.T) {
 	if rec := authRequest(h, "/api/auth/login", attacker, "198.51.100.1", wrong); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("spoofed X-Real-IP: %d", rec.Code)
 	}
-	// ...but a local reverse proxy reports the real client, which has its own budget.
+	// ...but a trusted reverse proxy reports the real client, which has its own budget.
 	if rec := authRequest(h, "/api/auth/login", "127.0.0.1:5555", "198.51.100.1", wrong); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("proxied client: %d %s", rec.Code, rec.Body)
+	}
+	// A private-network peer is not a proxy unless TRUSTED_PROXIES says so: a host on the
+	// LAN cannot rotate its key with X-Real-IP.
+	const lanPeer = "192.168.1.20:4000"
+	for i := range 3 {
+		if rec := authRequest(h, "/api/auth/login", lanPeer, fmt.Sprintf("198.51.100.%d", i+10), wrong); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("LAN attempt %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	if rec := authRequest(h, "/api/auth/login", lanPeer, "198.51.100.99", wrong); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("LAN peer choosing its key: %d", rec.Code)
 	}
 
 	// Per account: failed logins from many addresses lock the account's logins for a while,
@@ -176,6 +193,145 @@ func TestSuccessfulLoginClearsFailures(t *testing.T) {
 		if rec := authRequest(h, "/api/auth/login", "203.0.113.1:1", "", wrong); rec.Code != http.StatusUnauthorized {
 			t.Fatalf("failure %d after a successful login: %d", i, rec.Code)
 		}
+	}
+}
+
+// meRequest is a PATCH /auth/me request with token from the given peer address.
+func meRequest(h http.Handler, peer, token, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPatch, "/api/auth/me", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.RemoteAddr = peer
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestPasswordChangeThrottling: PATCH /auth/me verifies the current password when it changes
+// the password, so it is throttled like a login — wrong current passwords per session, and
+// requests per client address (sharing the sign-in budget) — or a stolen session could
+// guess the password at bcrypt speed. Name-only updates are not throttled.
+func TestPasswordChangeThrottling(t *testing.T) {
+	e := newTestEnv(t)
+	victim := e.createUser("Victim")
+	other := e.createUser("Other")
+	h := NewRouter(Deps{Service: e.svc, Logger: discardLogger, AuthRateLimit: 1000})
+	guess := `{"currentPassword":"a-guess-123","newPassword":"attacker-password"}`
+	right := fmt.Sprintf(`{"currentPassword":%q,"newPassword":"a-new-password"}`, testPassword)
+	isRateLimited := func(rec *httptest.ResponseRecorder) bool {
+		return rec.Code == http.StatusTooManyRequests && strings.Contains(rec.Body.String(), `"rate_limited"`) && rec.Header().Get("Retry-After") != ""
+	}
+
+	// Requests that never check the current password (an invalid new one) do not count.
+	for i := range accountFailureBurst + 5 {
+		if rec := meRequest(h, "203.0.113.1:1", victim.Token, `{"currentPassword":"a-guess-123","newPassword":"short"}`); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"newPassword"`) {
+			t.Fatalf("invalid change %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+
+	// Per session, whatever the address: accountFailureBurst wrong guesses, then 429 — even
+	// for the right password, which must not be confirmed either way.
+	stolen := victim.Token
+	for i := range accountFailureBurst {
+		if rec := meRequest(h, fmt.Sprintf("203.0.113.%d:1", i+1), stolen, guess); rec.Code != http.StatusBadRequest {
+			t.Fatalf("guess %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	if rec := meRequest(h, "203.0.113.99:1", stolen, right); !isRateLimited(rec) {
+		t.Fatalf("throttled session: %d %s (Retry-After %q)", rec.Code, rec.Body, rec.Header().Get("Retry-After"))
+	}
+	// Renames still work, but a session cannot renew itself (and its budget) with one.
+	nextTokenSecond()
+	rec := meRequest(h, "203.0.113.99:1", stolen, `{"name":"Victim Renamed"}`)
+	if renamed := decodeAs[dto.AuthResponse](t, &testResponse{Status: rec.Code, Body: rec.Body.Bytes()}, http.StatusOK); renamed.Token != stolen {
+		t.Fatal("a rename returned a new session")
+	}
+	if rec := meRequest(h, "203.0.113.99:1", stolen, right); !isRateLimited(rec) {
+		t.Fatalf("after a rename: %d %s", rec.Code, rec.Body)
+	}
+	// Other users are unaffected.
+	if rec := meRequest(h, "203.0.113.99:1", other.Token, right); rec.Code != http.StatusOK {
+		t.Fatalf("other user: %d %s", rec.Code, rec.Body)
+	}
+	// Whoever holds a stolen session cannot lock the owner out of the password change that
+	// revokes it: signing in again (the guesses did not lock the account's sign-in) starts a
+	// session with its own budget.
+	nextTokenSecond()
+	rec = authRequest(h, "/api/auth/login", "203.0.113.99:1", "", fmt.Sprintf(`{"email":%q,"password":%q}`, victim.Email, testPassword))
+	owner := decodeAs[dto.AuthResponse](t, &testResponse{Status: rec.Code, Body: rec.Body.Bytes()}, http.StatusOK).Token
+	if rec := meRequest(h, "198.51.100.1:1", owner, right); rec.Code != http.StatusOK {
+		t.Fatalf("owner's new session: %d %s", rec.Code, rec.Body)
+	}
+	if rec := meRequest(h, "203.0.113.99:1", stolen, `{}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("stolen session after the change: %d %s", rec.Code, rec.Body)
+	}
+
+	// Per client address: password changes spend the sign-in budget; renames do not.
+	e = newTestEnv(t)
+	u := e.createUser("Client")
+	h = NewRouter(Deps{Service: e.svc, Logger: discardLogger, AuthRateLimit: 3})
+	const client = "198.51.100.7:4000"
+	if rec := authRequest(h, "/api/auth/login", client, "", fmt.Sprintf(`{"email":%q,"password":%q}`, u.Email, testPassword)); rec.Code != http.StatusOK {
+		t.Fatalf("login: %d", rec.Code)
+	}
+	for i := range 2 {
+		if rec := meRequest(h, client, u.Token, guess); rec.Code != http.StatusBadRequest {
+			t.Fatalf("guess %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	if rec := meRequest(h, client, u.Token, guess); !isRateLimited(rec) {
+		t.Fatalf("over the address budget: %d %s", rec.Code, rec.Body)
+	}
+	for i := range 5 {
+		if rec := meRequest(h, client, u.Token, fmt.Sprintf(`{"name":"Client %d"}`, i)); rec.Code != http.StatusOK {
+			t.Fatalf("rename %d: %d %s", i, rec.Code, rec.Body)
+		}
+	}
+}
+
+// TestConcurrentGuessesAreCounted: a failure budget is spent before the password is
+// checked, so a burst of concurrent guesses (from many addresses, each within its own
+// address budget) gets exactly the budget's guesses through, not one per request.
+func TestConcurrentGuessesAreCounted(t *testing.T) {
+	e := newTestEnv(t)
+	u := e.createUser("Target")
+	h := NewRouter(Deps{Service: e.svc, Logger: discardLogger, AuthRateLimit: 1000})
+	const burst = 3 * accountFailureBurst
+
+	// concurrently sends burst requests, each from its own address, and counts the statuses.
+	concurrently := func(send func(peer string) *httptest.ResponseRecorder) map[int]int {
+		var wg sync.WaitGroup
+		codes := make(chan int, burst)
+		for i := range burst {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				codes <- send(fmt.Sprintf("203.0.113.%d:1", i+1)).Code
+			}()
+		}
+		wg.Wait()
+		close(codes)
+		counts := map[int]int{}
+		for c := range codes {
+			counts[c]++
+		}
+		return counts
+	}
+	want := map[int]int{http.StatusTooManyRequests: burst - accountFailureBurst}
+
+	want[http.StatusBadRequest] = accountFailureBurst
+	guess := `{"currentPassword":"a-guess-123","newPassword":"attacker-password"}`
+	if got := concurrently(func(peer string) *httptest.ResponseRecorder { return meRequest(h, peer, u.Token, guess) }); !maps.Equal(got, want) {
+		t.Errorf("wrong current passwords: statuses %v, want %v", got, want)
+	}
+
+	delete(want, http.StatusBadRequest)
+	want[http.StatusUnauthorized] = accountFailureBurst
+	wrong := fmt.Sprintf(`{"email":%q,"password":"wrong-password"}`, u.Email)
+	if got := concurrently(func(peer string) *httptest.ResponseRecorder {
+		return authRequest(h, "/api/auth/login", peer, "", wrong)
+	}); !maps.Equal(got, want) {
+		t.Errorf("failed logins: statuses %v, want %v", got, want)
 	}
 }
 

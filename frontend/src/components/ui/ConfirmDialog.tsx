@@ -3,6 +3,7 @@ import { createContext, use, useCallback, useMemo, useRef, useState, type ReactN
 import { cn } from '@/lib/cn'
 import { errorMessage } from '@/lib/errors'
 import { Button } from './Button'
+import { useReturnFocus } from './Dialog'
 import { toast } from './toast'
 
 /** Props of `ConfirmDialog`. */
@@ -37,11 +38,15 @@ export function ConfirmDialog({
   confirmDisabled = false,
   onConfirm,
 }: ConfirmDialogProps) {
+  const returnFocus = useReturnFocus()
   return (
     <AlertDialog.Root open={open} onOpenChange={(next) => !loading && onOpenChange(next)}>
       <AlertDialog.Portal>
         <AlertDialog.Overlay className="fixed inset-0 z-50 animate-fade-in bg-overlay" />
         <AlertDialog.Content
+          // Only records the opener: AlertDialog then focuses Cancel.
+          onOpenAutoFocus={returnFocus.capture}
+          onCloseAutoFocus={returnFocus.restore}
           className={cn(
             'fixed top-[max(1rem,14vh)] left-1/2 z-50 w-[calc(100vw-2rem)] max-w-[440px] -translate-x-1/2',
             'animate-scale-in rounded-lg border border-border bg-surface p-6 text-fg shadow-overlay focus:outline-none',

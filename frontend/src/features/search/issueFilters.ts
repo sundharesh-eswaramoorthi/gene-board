@@ -5,6 +5,7 @@ import type {
   IssueSort,
   IssueType,
   Priority,
+  Project,
   SortOrder,
   Status,
   StatusCategory,
@@ -220,16 +221,21 @@ export function parseFilters(params: URLSearchParams, scoped: boolean): IssueFil
 
 /**
  * The filter values that only make sense inside one project, cleared: applied when the
- * global route's project filter changes (ids of another project would match nothing).
+ * global route's project filter changes to `next` (ids of another project would match
+ * nothing). Picking a Kanban project also clears the sprint choice: Kanban projects plan
+ * without sprints, so the bar offers no Sprint menu there unless a sprint is already in the URL.
  */
-export function withoutProjectScopedFilters(filters: IssueFilters): Partial<IssueFilters> {
+export function withoutProjectScopedFilters(
+  filters: IssueFilters,
+  next?: Pick<Project, 'type'> | null,
+): Partial<IssueFilters> {
   return {
     statusIds: [],
     assignees: filters.assignees.filter((a) => typeof a !== 'number'),
     reporters: filters.reporters.filter((r) => typeof r !== 'number'),
     labelIds: [],
     epic: null,
-    sprint: typeof filters.sprint === 'number' ? null : filters.sprint,
+    sprint: typeof filters.sprint === 'number' || next?.type === 'kanban' ? null : filters.sprint,
   }
 }
 

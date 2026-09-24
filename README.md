@@ -86,11 +86,14 @@ sign-ins survive container restarts.
 ```sh
 make install       # Go modules + frontend npm packages
 make db-up         # Postgres only
-make dev           # API on :8484 (from source) + Vite on :5173 with hot reload; Ctrl-C stops both
+make dev           # API on 127.0.0.1:8484 (from source) + Vite on :5173 with hot reload; Ctrl-C stops both
 make seed          # demo data (skips if already seeded)
 ```
 
-`make dev` and `make up` both use port 8484 — run `make down` before `make dev`.
+`make dev` and `make up` both use port 8484 — run `make down` before `make dev`. Run from
+source, the API listens on 127.0.0.1 only, because it signs sessions with the development
+`JWT_SECRET` published in this repository (`BIND_HOST` and `JWT_SECRET` in
+[backend/README.md](backend/README.md) change that).
 Backend conventions (adding endpoints, queries, migrations): [backend/README.md](backend/README.md).
 
 ## Test
