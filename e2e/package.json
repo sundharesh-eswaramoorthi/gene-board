@@ -1,0 +1,23 @@
+{
+  "name": "geneboard-e2e",
+  "private": true,
+  "version": "0.1.0",
+  "description": "End-to-end browser tests for Gene Board (Playwright, real Go API + Vite dev server)",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "test:flows": "playwright test --project=e2e --no-deps",
+    "test:ui": "playwright test --ui",
+    "screenshots": "playwright test --project=visual",
+    "report": "playwright show-report",
+    "typecheck": "tsc --noEmit",
+    "install-browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^24.13.6",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.0",
+    "typescript": "~6.0.3"
+  }
+}

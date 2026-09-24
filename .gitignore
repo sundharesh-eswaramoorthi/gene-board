@@ -1,0 +1,21 @@
+# Go
+backend/bin/
+backend/tmp/
+*.test
+coverage.out
+
+# Node
+node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+e2e/test-results/
+e2e/playwright-report/
+e2e/.cache/
+
+# Env / OS / IDE
+.env
+.env.local
+.DS_Store
+.idea/
+.vscode/

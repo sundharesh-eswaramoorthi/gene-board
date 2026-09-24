@@ -1,0 +1,427 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+/*
+ * Gene Board design tokens.
+ *
+ * Colours are semantic CSS variables (light on :root, dark on .dark) exposed to Tailwind
+ * through `@theme inline`, so components write `bg-surface text-fg border-border`.
+ * The default Tailwind colour palette is intentionally disabled below: raw palette classes
+ * such as `bg-blue-500` generate no CSS. Fixed brand colours (issue types, priorities,
+ * avatars, epics, labels) come from helpers in `src/lib/`.
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-sunken: #f1f2f5;
+  --surface-hover: #eef0f4;
+  --surface-selected: #e8edff;
+  --surface-raised: #ffffff;
+  --overlay: rgb(15 20 35 / 0.42);
+
+  --border: #e2e5ea;
+  --border-strong: #c7ccd5;
+
+  --fg: #172033;
+  --fg-muted: #4f5a6d;
+  --fg-subtle: #7b8496;
+
+  --primary: #3b5bdb;
+  --primary-hover: #3049c0;
+  --primary-fg: #ffffff;
+  --primary-subtle: #edf1ff;
+
+  --danger: #cf2d24;
+  --danger-hover: #b0231b;
+  --danger-fg: #ffffff;
+  --danger-subtle: #fdeceb;
+
+  --success: #1d7f4a;
+  --success-subtle: #e3f5ea;
+
+  --warning: #a95c00;
+  --warning-subtle: #fff3df;
+
+  --info: #0b5fc6;
+  --info-subtle: #e4efff;
+
+  --neutral: #44516a;
+  --neutral-subtle: #e7e9ee;
+
+  --ring: #4c6ef5;
+
+  /* chip-tint: how much of the chip colour goes into its text / background */
+  --chip-text-mix: 72%;
+  --chip-bg-mix: 15%;
+
+  --elevation-card: 0 1px 1px rgb(23 32 51 / 0.1), 0 0 1px rgb(23 32 51 / 0.2);
+  --elevation-raised: 0 8px 16px -4px rgb(23 32 51 / 0.2), 0 0 1px rgb(23 32 51 / 0.24);
+  --elevation-overlay: 0 12px 32px -6px rgb(23 32 51 / 0.24), 0 0 1px rgb(23 32 51 / 0.28);
+
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0e1015;
+  --surface: #16181f;
+  --surface-sunken: #111318;
+  --surface-hover: #1f222b;
+  --surface-selected: #222a47;
+  --surface-raised: #1c1f27;
+  --overlay: rgb(0 0 0 / 0.6);
+
+  --border: #2a2e38;
+  --border-strong: #3b404c;
+
+  --fg: #e6e8ee;
+  --fg-muted: #a6acba;
+  --fg-subtle: #767d8c;
+
+  --primary: #7c95ff;
+  --primary-hover: #97aaff;
+  --primary-fg: #0c1233;
+  --primary-subtle: #1d2544;
+
+  --danger: #f87168;
+  --danger-hover: #fa8f88;
+  --danger-fg: #2a0b09;
+  --danger-subtle: #3a1c1a;
+
+  --success: #4bce97;
+  --success-subtle: #143126;
+
+  --warning: #f5b35c;
+  --warning-subtle: #3a2a12;
+
+  --info: #66a8ff;
+  --info-subtle: #13284a;
+
+  --neutral: #b3b9c6;
+  --neutral-subtle: #2c303a;
+
+  --ring: #7c95ff;
+
+  --chip-text-mix: 52%;
+  --chip-bg-mix: 24%;
+
+  --elevation-card: 0 1px 1px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.04);
+  --elevation-raised: 0 8px 16px -4px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.06);
+  --elevation-overlay: 0 12px 32px -6px rgb(0 0 0 / 0.6), 0 0 0 1px rgb(255 255 255 / 0.07);
+
+  color-scheme: dark;
+}
+
+@theme {
+  /* Disable the stock palette: only semantic tokens (plus white/black) exist. */
+  --color-*: initial;
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* 11px — lozenges, tiny meta text */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+
+  --animate-fade-in: gb-fade-in 150ms ease-out;
+  --animate-scale-in: gb-scale-in 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-slide-down: gb-slide-down 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-shimmer: gb-shimmer 1.6s ease-in-out infinite;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-hover: var(--surface-hover);
+  --color-surface-selected: var(--surface-selected);
+  --color-surface-raised: var(--surface-raised);
+  --color-overlay: var(--overlay);
+
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-fg: var(--primary-fg);
+  --color-primary-subtle: var(--primary-subtle);
+
+  --color-danger: var(--danger);
+  --color-danger-hover: var(--danger-hover);
+  --color-danger-fg: var(--danger-fg);
+  --color-danger-subtle: var(--danger-subtle);
+
+  --color-success: var(--success);
+  --color-success-subtle: var(--success-subtle);
+
+  --color-warning: var(--warning);
+  --color-warning-subtle: var(--warning-subtle);
+
+  --color-info: var(--info);
+  --color-info-subtle: var(--info-subtle);
+
+  --color-neutral: var(--neutral);
+  --color-neutral-subtle: var(--neutral-subtle);
+
+  --color-ring: var(--ring);
+
+  --shadow-card: var(--elevation-card);
+  --shadow-raised: var(--elevation-raised);
+  --shadow-overlay: var(--elevation-overlay);
+}
+
+@keyframes gb-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes gb-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes gb-slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes gb-shimmer {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/*
+ * Tinted chip driven by a runtime colour: set `--chip-color` inline (see `chipStyle()` in
+ * src/lib/colors.ts). Text and background are mixed with the theme so any hex colour stays
+ * legible in both light and dark mode.
+ */
+@utility chip-tint {
+  color: color-mix(in oklab, var(--chip-color, var(--neutral)) var(--chip-text-mix), var(--fg));
+  background-color: color-mix(in oklab, var(--chip-color, var(--neutral)) var(--chip-bg-mix), transparent);
+}
+
+/* Thin, token-coloured scrollbars for scroll containers. */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--bg);
+    color: var(--fg);
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--primary) 28%, transparent);
+  }
+
+  /* A modal Radix dialog sets pointer-events: none on <body>; toasts (portaled outside the
+     dialog) must stay clickable, e.g. the "View issue" action while "Create another" is on. */
+  [data-sonner-toaster] {
+    pointer-events: auto;
+  }
+
+  /* Consistent keyboard focus ring for anything focusable. Controls with their own
+     focus treatment (inputs) opt out with `focus-visible:outline-none`. */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+
+  /* The indicator follows `color-scheme` (light icon in dark mode) — don't invert it again. */
+  input[type='date']::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.6;
+  }
+
+  /* Scrollbars inside the app shell */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 1ms !important;
+      transition-duration: 1ms !important;
+    }
+  }
+}
+
+/* Rendered Markdown (issue descriptions, comments). Apply with className="markdown". */
+@layer components {
+  .markdown {
+    color: var(--fg);
+    font-size: 0.875rem;
+    line-height: 1.5rem;
+    overflow-wrap: anywhere;
+  }
+  .markdown > :first-child {
+    margin-top: 0;
+  }
+  .markdown > :last-child {
+    margin-bottom: 0;
+  }
+  .markdown p,
+  .markdown ul,
+  .markdown ol,
+  .markdown pre,
+  .markdown blockquote,
+  .markdown table {
+    margin: 0.5rem 0;
+  }
+  .markdown h1,
+  .markdown h2,
+  .markdown h3,
+  .markdown h4 {
+    margin: 1rem 0 0.5rem;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .markdown h1 {
+    font-size: 1.25rem;
+  }
+  .markdown h2 {
+    font-size: 1.125rem;
+  }
+  .markdown h3 {
+    font-size: 1rem;
+  }
+  .markdown h4 {
+    font-size: 0.875rem;
+  }
+  .markdown ul {
+    list-style: disc;
+    padding-left: 1.5rem;
+  }
+  .markdown ol {
+    list-style: decimal;
+    padding-left: 1.5rem;
+  }
+  .markdown li + li {
+    margin-top: 0.125rem;
+  }
+  .markdown li > input[type='checkbox'] {
+    margin-right: 0.375rem;
+    vertical-align: middle;
+  }
+  .markdown ul:has(> li > input[type='checkbox']) {
+    list-style: none;
+    padding-left: 0.25rem;
+  }
+  .markdown a {
+    color: var(--primary);
+    text-decoration: none;
+  }
+  .markdown a:hover {
+    text-decoration: underline;
+  }
+  .markdown strong {
+    font-weight: 600;
+  }
+  .markdown code {
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+    background-color: var(--surface-sunken);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.05rem 0.3rem;
+  }
+  .markdown pre {
+    background-color: var(--surface-sunken);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    overflow-x: auto;
+    line-height: 1.25rem;
+  }
+  .markdown pre code {
+    background: none;
+    border: 0;
+    padding: 0;
+  }
+  .markdown blockquote {
+    border-left: 3px solid var(--border-strong);
+    padding-left: 0.75rem;
+    color: var(--fg-muted);
+  }
+  .markdown hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 1rem 0;
+  }
+  .markdown table {
+    border-collapse: collapse;
+    display: block;
+    overflow-x: auto;
+  }
+  .markdown th,
+  .markdown td {
+    border: 1px solid var(--border);
+    padding: 0.25rem 0.625rem;
+    text-align: left;
+  }
+  .markdown th {
+    background-color: var(--surface-sunken);
+    font-weight: 600;
+  }
+  .markdown img {
+    max-width: 100%;
+    border-radius: 6px;
+  }
+}

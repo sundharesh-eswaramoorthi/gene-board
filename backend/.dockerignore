@@ -1,0 +1,7 @@
+# Keep the build context small; only sources and go.mod/go.sum are needed.
+bin/
+tmp/
+*.test
+coverage.out
+Dockerfile
+.dockerignore

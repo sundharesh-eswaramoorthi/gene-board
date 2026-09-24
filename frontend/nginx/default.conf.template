@@ -1,0 +1,82 @@
+# Gene Board web server (rendered by the nginx image's envsubst step at start-up).
+#   ${API_UPSTREAM}  host:port of the Go API (compose service "api" by default)
+#   ${DNS_RESOLVER}  resolver for that host name (Docker's embedded DNS by default)
+
+# Websocket upgrades: forward "Connection: upgrade" only when the client asked for one.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# Access log without query strings ($uri, not $request): the project websocket authenticates
+# with ?token=<jwt>, which must not end up in logs.
+log_format geneboard '$remote_addr - [$time_local] "$request_method $uri $server_protocol" '
+                     '$status $body_bytes_sent $request_time "$http_referer" "$http_user_agent"';
+
+server {
+    # Unprivileged port: the image runs nginx as a non-root user (nginx-unprivileged).
+    listen 8080;
+    listen [::]:8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    server_tokens off;
+    access_log /var/log/nginx/access.log geneboard;
+
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_types text/css application/javascript application/json image/svg+xml text/plain;
+
+    # Container health probe (the image's HEALTHCHECK); does not touch the API.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    # The API: REST and the project websockets (/api/projects/{key}/ws). The upstream is
+    # resolved at request time, so the web container survives API restarts / IP changes.
+    location /api/ {
+        resolver ${DNS_RESOLVER} valid=10s ipv6=off;
+        set $api_upstream http://${API_UPSTREAM};
+        proxy_pass $api_upstream;
+        proxy_http_version 1.1;
+        # Keep the browser's host:port: the API accepts websocket Origins matching its own host.
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        # Websockets stay open between the API's 30s pings; plain requests finish long before.
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        client_max_body_size 2m;
+    }
+
+    # Content-hashed bundles: cache for a year.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header X-Content-Type-Options nosniff always;
+        try_files $uri =404;
+    }
+
+    # Everything else is the single-page app: real files as-is, any other path gets
+    # index.html (client-side routes such as /projects/GB/board). index.html is revalidated
+    # on every load so a new deployment is picked up immediately.
+    #
+    # Content-Security-Policy: scripts, styles, fonts and API/websocket connections only from
+    # this origin (the pre-paint theme script is the file /theme-init.js, not inline; inline
+    # style attributes are needed by the UI primitives). Images may come from any https URL
+    # because Markdown descriptions and comments can embed them. The app cannot be framed.
+    location / {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'" always;
+        add_header X-Frame-Options DENY always;
+        try_files $uri $uri/ /index.html;
+    }
+}

@@ -1,0 +1,10 @@
+# Keep the build context small: dependencies are installed and the bundle is built inside
+# the image from package-lock.json and the sources.
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+test-results/
+playwright-report/
+Dockerfile
+.dockerignore

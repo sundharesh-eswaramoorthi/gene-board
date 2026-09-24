@@ -1,0 +1,68 @@
+name: geneboard
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: geneboard-db
+    environment:
+      POSTGRES_USER: geneboard
+      POSTGRES_PASSWORD: geneboard
+      POSTGRES_DB: geneboard
+    # Loopback only: the committed credentials belong to a superuser, so the database must not
+    # be reachable from the network.
+    ports:
+      - "127.0.0.1:5442:5432"
+    volumes:
+      - geneboard-pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geneboard -d geneboard"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # The API and the web app as containers (optional; `make dev` runs both from source).
+  #   docker compose --profile full up -d --build     (or: make up)
+  # Then open http://localhost:8485. Stop a locally running API first: both use port 8484.
+  #
+  # JWT_SECRET: the image never uses the published development secret. Without one, the API
+  # generates a random secret at start-up (sign-ins end when the container restarts); set
+  # JWT_SECRET (32+ characters, e.g. `openssl rand -hex 32`) to keep sessions.
+  api:
+    profiles: ["full"]
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgres://geneboard:geneboard@db:5432/geneboard?sslmode=disable
+      PORT: "8484"
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_TTL: ${JWT_TTL:-168h}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-20}
+    # Loopback only (the web container reaches the API on the compose network); browsers
+    # go through nginx on 8485.
+    ports:
+      - "127.0.0.1:8484:8484"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # nginx serving the built SPA; proxies /api (REST + websockets) to the api service, so the
+  # browser only talks to this origin.
+  web:
+    profiles: ["full"]
+    build:
+      context: ./frontend
+    environment:
+      API_UPSTREAM: api:8484
+    ports:
+      - "8485:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  geneboard-pgdata:
