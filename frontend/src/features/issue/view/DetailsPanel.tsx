@@ -1,8 +1,9 @@
-import { useId } from 'react'
-import type { IssueDetail, Project } from '@/api/types'
-import { Tooltip } from '@/components/ui'
+import { X } from 'lucide-react'
+import { useCallback, useId } from 'react'
+import type { IssueDetail, IssueSprintRef, Project } from '@/api/types'
+import { IconButton, Tooltip } from '@/components/ui'
 import { formatDateTime, formatRelative } from '@/lib/dates'
-import type { SaveIssue } from '../shared/useIssueSave'
+import { useOptimisticField, type SaveIssue } from '../shared/useIssueSave'
 import { isDone } from '@/lib/issueMeta'
 import {
   AssigneeField,
@@ -16,6 +17,7 @@ import {
   StatusField,
   StoryPointsField,
 } from './detailFields'
+import { useIssueView } from './IssueViewContext'
 
 /** Props of `DetailsPanel`. */
 export interface DetailsPanelProps {
@@ -26,12 +28,37 @@ export interface DetailsPanelProps {
 }
 
 /**
- * The sprint field applies to standard issues of Scrum projects. It also stays visible when an
- * issue still carries a sprint (e.g. the project switched to Kanban) so it can be cleared.
+ * Which sprint field a standard issue gets: the picker in Scrum projects; in Kanban projects
+ * only the sprint it may still be in from before the switch, so it can be taken out of it
+ * (Kanban issues can't join a sprint: the API refuses one).
  */
-function showsSprint(issue: IssueDetail, project: Project | undefined): boolean {
-  if (issue.type === 'epic' || issue.type === 'subtask') return false
-  return project?.type === 'scrum' || issue.sprint != null
+function sprintFieldKind(issue: IssueDetail, project: Project | undefined): 'picker' | 'leftover' | null {
+  if (issue.type === 'epic' || issue.type === 'subtask') return null
+  if (project?.type === 'kanban') return issue.sprint != null ? 'leftover' : null
+  return project?.type === 'scrum' || issue.sprint != null ? 'picker' : null
+}
+
+/** A Kanban issue's leftover sprint, read-only with a button that removes the issue from it. */
+function LeftoverSprintField({ issue, save }: { issue: IssueDetail; save: SaveIssue }) {
+  const { canEdit } = useIssueView()
+  const persist = useCallback(() => save({ sprintId: null }), [save])
+  const { value, commit, isPending } = useOptimisticField<IssueSprintRef | null>(issue.sprint, persist)
+  return (
+    <DetailRow label="Sprint" saving={isPending}>
+      <span className="flex min-h-8 min-w-0 items-center gap-1 text-sm text-fg" data-testid="issue-leftover-sprint">
+        <span className="truncate">{value?.name ?? 'None'}</span>
+        {value && canEdit && (
+          <IconButton
+            size="xs"
+            label={`Remove from ${value.name}`}
+            icon={<X />}
+            disabled={isPending}
+            onClick={() => commit(null)}
+          />
+        )}
+      </span>
+    </DetailRow>
+  )
 }
 
 /**
@@ -83,7 +110,8 @@ export function DetailsPanel({ issue, project, save }: DetailsPanelProps) {
           <ReporterField {...fieldProps} />
           <PriorityField {...fieldProps} />
           <LabelsField {...fieldProps} />
-          {showsSprint(issue, project) && <SprintField {...fieldProps} />}
+          {sprintFieldKind(issue, project) === 'picker' && <SprintField {...fieldProps} />}
+          {sprintFieldKind(issue, project) === 'leftover' && <LeftoverSprintField {...fieldProps} />}
           <StrandedSprint issue={issue} />
           {issue.type !== 'epic' && <ParentField {...fieldProps} />}
           <StoryPointsField {...fieldProps} />

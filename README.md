@@ -18,10 +18,11 @@ endpoint) and [docs/FRONTEND.md](docs/FRONTEND.md) (UI architecture, design syst
 
 ## Run it
 
-Requirements: Docker Desktop, plus Go 1.27+ and Node 22+ for the `make` targets that run from source.
+Requirements: Docker Desktop (all that `make up` and `make demo-reset` need), plus Go 1.27+
+and Node 22+ for the `make` targets that run from source.
 
 ```sh
-make up            # build + start db, api and web containers
+make up            # build + start db, api and web containers; a new database gets the demo data
 open http://localhost:8485
 ```
 
@@ -33,6 +34,7 @@ open http://localhost:8485
 
 Demo data: **GB "Gene Board"** (Scrum; a completed sprint, an active sprint, a planned sprint,
 a backlog, 3 epics, subtasks, labels, comments, links) and **OPS "Operations"** (Kanban).
+`make up` loads it only into a database without accounts, so it never touches one in use.
 
 | Command | What it does |
 |---|---|
@@ -42,8 +44,8 @@ a backlog, 3 epics, subtasks, labels, comments, links) and **OPS "Operations"** 
 | `make help` | All targets |
 
 Ports: web **8485** · API 8484 (loopback only) · Postgres 5442 (loopback only).
-Sessions are signed with `JWT_SECRET` from `.env` (git-ignored, generated locally); keep it so
-sign-ins survive container restarts.
+Sessions are signed with `JWT_SECRET` from `.env` (git-ignored; the first `make up` generates
+it); keep it so sign-ins survive container restarts.
 
 ---
 
@@ -101,7 +103,7 @@ Backend conventions (adding endpoints, queries, migrations): [backend/README.md]
 ```sh
 make test-backend   # Go unit + DB-backed integration tests (uses the geneboard_test database)
 make check-frontend # TypeScript + lint
-make e2e            # Playwright: 42 browser tests + screenshots in e2e/screenshots/
+make e2e            # Playwright: 96 browser tests + screenshots in e2e/screenshots/
 ```
 
 The e2e suite starts its own API (:8491) and Vite (:5174) against a throwaway `geneboard_e2e`

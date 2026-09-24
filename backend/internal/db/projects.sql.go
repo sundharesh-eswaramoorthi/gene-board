@@ -174,7 +174,7 @@ FROM projects p
 JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1
 LEFT JOIN users u ON u.id = p.lead_id
 WHERE ($2::bigint IS NULL OR p.id = $2::bigint)
-ORDER BY lower(p.name), p.id
+ORDER BY lower(p.name) COLLATE "und-x-icu", p.id
 `
 
 type ListProjectViewsParams struct {
@@ -235,6 +235,8 @@ SELECT id FROM projects WHERE id = $1 FOR NO KEY UPDATE
 // (like the implicit lock of NextIssueNumber) still lets other transactions insert rows
 // that reference the project: a plain FOR UPDATE would also block their foreign-key checks
 // and deadlock with writers that hold an issue lock while logging activity.
+// Call it through the service's lockProjectAs, which re-reads the project and the caller's
+// role once the lock is held (a project deleted meanwhile locks no row here).
 func (q *Queries) LockProject(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, lockProject, id)
 	return err

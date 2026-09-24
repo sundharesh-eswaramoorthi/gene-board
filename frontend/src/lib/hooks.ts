@@ -105,14 +105,73 @@ export function useHotkey(key: string, handler: (event: KeyboardEvent) => void, 
   }, [key, mod, shift, allowInInputs, enabled])
 }
 
-/** Copy text to the clipboard; resolves false when the browser refuses. */
-export async function copyToClipboard(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text)
-    return true
-  } catch {
-    return false
+/**
+ * Keyboard focus for an inline editor that stands in for a button while open ("Edit", "Add a
+ * comment…"): closing it from inside — save, Cancel, Escape — gives focus back to that button
+ * instead of dropping it on the page along with the editor. Put `buttonRef` on the button and
+ * `editorRef` on the editor, and call `returnFocus()` right before closing. After a save that
+ * settled later, `returnFocus({ ifFocusInside: true })` leaves focus the user moved elsewhere
+ * meanwhile where it is.
+ */
+export function useEditorFocusReturn(open: boolean) {
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const editorRef = useRef<HTMLDivElement>(null)
+  const pending = useRef(false)
+
+  useEffect(() => {
+    if (open || !pending.current) return
+    pending.current = false
+    buttonRef.current?.focus()
+  }, [open])
+
+  const returnFocus = useCallback(({ ifFocusInside = false }: { ifFocusInside?: boolean } = {}) => {
+    const active = document.activeElement
+    pending.current =
+      !ifFocusInside || !active || active === document.body || (editorRef.current?.contains(active) ?? false)
+  }, [])
+
+  return { buttonRef, editorRef, returnFocus }
+}
+
+/**
+ * The legacy copy command, for pages without the Clipboard API: it only exists on https and
+ * localhost, not on the plain-http LAN address teammates may use. Fills the `copy` event instead
+ * of selecting a temporary textarea, so focus stays put (inside an open menu or dialog too).
+ * Must run inside the user's click.
+ */
+function copyWithCommand(text: string): boolean {
+  let copied = false
+  const onCopy = (event: ClipboardEvent) => {
+    if (!event.clipboardData) return
+    event.clipboardData.setData('text/plain', text)
+    event.preventDefault()
+    copied = true
   }
+  document.addEventListener('copy', onCopy)
+  try {
+    document.execCommand('copy')
+  } catch {
+    /* unsupported */
+  } finally {
+    document.removeEventListener('copy', onCopy)
+  }
+  return copied
+}
+
+/**
+ * Copy text to the clipboard (call it from a click handler); resolves false when the browser
+ * refuses.
+ */
+export async function copyToClipboard(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      /* e.g. permission denied: try the legacy command */
+    }
+  }
+  return copyWithCommand(text)
 }
 
 /** Sets `document.title` to "<title> · Gene Board" while mounted (plain "Gene Board" when empty). */

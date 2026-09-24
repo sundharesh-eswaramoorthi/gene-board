@@ -1,5 +1,5 @@
 import { createContext, lazy, Suspense, use, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router'
+import { useLocation, useNavigate, useSearchParams, type Location } from 'react-router'
 import type { IssueDetail, IssueType } from '@/api/types'
 import { normalizeKey } from '@/lib/projectKey'
 
@@ -49,11 +49,24 @@ const CreateIssueModalContext = createContext<CreateIssueModalApi | null>(null)
 interface ModalLocationState {
   /** How many consecutive history entries were pushed by openIssue (to unwind on close). */
   issueModalDepth?: number
+  /**
+   * The entry before them already showed the modal: the page was loaded with `?issue=` (a
+   * shared link), so unwinding alone would land on an open modal again.
+   */
+  issueModalBaseHasParam?: boolean
 }
 
 function stateDepth(state: unknown): number {
   const depth = (state as ModalLocationState | null)?.issueModalDepth
   return typeof depth === 'number' && depth > 0 ? depth : 0
+}
+
+/** `loc` without the `?issue=` param. */
+function withoutIssueParam(loc: Location) {
+  const params = new URLSearchParams(loc.search)
+  params.delete(ISSUE_MODAL_PARAM)
+  const search = params.toString()
+  return { pathname: loc.pathname, search: search ? `?${search}` : '', hash: loc.hash }
 }
 
 /**
@@ -70,9 +83,17 @@ export function ModalsProvider({ children }: { children: ReactNode }) {
 
   // Latest location in a ref so the context functions stay referentially stable.
   const locationRef = useRef(location)
+  // Set by closeIssue when the entry it unwinds to still has `?issue=`: once Back lands there,
+  // the param is removed from that entry too.
+  const stripParamOnReturn = useRef(false)
   useEffect(() => {
     locationRef.current = location
-  }, [location])
+    if (!stripParamOnReturn.current) return
+    stripParamOnReturn.current = false
+    if (stateDepth(location.state) === 0 && new URLSearchParams(location.search).has(ISSUE_MODAL_PARAM)) {
+      navigate(withoutIssueParam(location), { replace: true })
+    }
+  }, [location, navigate])
 
   const openIssue = useCallback(
     (issueKey: string) => {
@@ -80,11 +101,15 @@ export function ModalsProvider({ children }: { children: ReactNode }) {
       const key = normalizeKey(issueKey)
       const params = new URLSearchParams(loc.search)
       if (params.get(ISSUE_MODAL_PARAM)?.toUpperCase() === key) return
+      const depth = stateDepth(loc.state)
+      const baseHasParam =
+        depth === 0 ? params.has(ISSUE_MODAL_PARAM) : (loc.state as ModalLocationState).issueModalBaseHasParam === true
       params.set(ISSUE_MODAL_PARAM, key)
       const prevState = (loc.state ?? {}) as Record<string, unknown>
+      const state: ModalLocationState = { issueModalDepth: depth + 1, issueModalBaseHasParam: baseHasParam }
       navigate(
         { pathname: loc.pathname, search: `?${params.toString()}`, hash: loc.hash },
-        { state: { ...prevState, issueModalDepth: stateDepth(loc.state) + 1 } },
+        { state: { ...prevState, ...state } },
       )
     },
     [navigate],
@@ -92,16 +117,15 @@ export function ModalsProvider({ children }: { children: ReactNode }) {
 
   const closeIssue = useCallback(() => {
     const loc = locationRef.current
-    const params = new URLSearchParams(loc.search)
-    if (!params.has(ISSUE_MODAL_PARAM)) return
+    if (!new URLSearchParams(loc.search).has(ISSUE_MODAL_PARAM)) return
     const depth = stateDepth(loc.state)
     if (depth > 0) {
+      // Replacing the landing entry has to wait for the Back navigation to finish (see above).
+      stripParamOnReturn.current = (loc.state as ModalLocationState).issueModalBaseHasParam === true
       navigate(-depth)
       return
     }
-    params.delete(ISSUE_MODAL_PARAM)
-    const search = params.toString()
-    navigate({ pathname: loc.pathname, search: search ? `?${search}` : '', hash: loc.hash }, { replace: true })
+    navigate(withoutIssueParam(loc), { replace: true })
   }, [navigate])
 
   const [createState, setCreateState] = useState<{ open: boolean; defaults: CreateIssueDefaults; session: number }>({

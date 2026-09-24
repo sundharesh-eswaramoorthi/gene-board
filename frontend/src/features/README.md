@@ -42,9 +42,17 @@ UI playground in dev: **`/dev/ui`** renders every primitive and picker (source:
   `const returnFocus = useReturnFocus(fallback?)`: call `returnFocus.capture()` in
   `onOpenAutoFocus` and pass `onCloseAutoFocus={returnFocus.restore}`.
 - `IssueKeyLink` and `EpicChip interactive` stop click and pointerdown propagation, so you can use
-  them inside clickable or draggable cards and rows.
+  them inside clickable or draggable cards and rows, but never inside an element with
+  `role="button"` (for example one carrying dnd-kit's `attributes`). Put them beside the row's
+  control, as `BacklogRow` does, or use a stretched link like `IssueRefRow`.
 - `useHotkey` single-key shortcuts are paused while a dialog, menu, popover or listbox is open, and while typing.
   Global shortcuts already taken: **`c`** (create issue) and **`/`** (focus search).
+- A failed background refetch sets `isError` but **keeps `data`**. Show the error state only when
+  nothing is cached (`isLoadingError`, i.e. `isError && !data`), so an API blip doesn't wipe a page.
+  Where stale rows could mislead, say the refresh failed over them (the Issues page does).
+- Text limits are in **characters**, as the API counts them: `.length` counts an emoji twice.
+  `maxLength` on `Input`, `Textarea` and `EditableText` already counts characters; for your own
+  checks use `charCount(s)` from `@/lib/chars`.
 
 ---
 
@@ -64,8 +72,10 @@ import { useIssue, useUpdateIssue, qk, api, ApiError, type Issue } from '@/api'
   `qk.me() qk.users(q) qk.projects() qk.project(key) qk.board(key) qk.backlog(key) qk.epics(key)
   qk.statuses(key) qk.labels(key) qk.members(key) qk.sprints(key, states?) qk.projectActivity(key)
   qk.issue(issueKey) qk.comments(issueKey) qk.issueActivity(issueKey) qk.issues(params?) qk.activityFeed()`.
-- `invalidateProject(qc, key | keys, { projects? })` is the standard refresh:
-  `['project', KEY]` + `['issues']` + `['activity']` (+ `['projects']`).
+- `invalidateProject(qc, key | keys, { projects?, linkedIssues? })` is the standard refresh:
+  `['project', KEY]` + `['issues']` + `['activity']` (+ `['projects']`; + other projects' issue
+  details with `linkedIssues`, for mutations that change an issue's summary, type, status or
+  priority or delete it, since linked issues show those).
 - **Every mutation hook runs that refresh on success, and the mutation promise resolves only after
   the active queries have refetched.** So `await mutateAsync()` means the cache is fresh: drop your
   optimistic board state at that point and nothing flickers. Mutation hooks never update
@@ -134,7 +144,7 @@ openCreateIssue({ projectKey: 'GB', type: 'subtask', parentId: 12, parentKey: 'G
 ```
 
 - `openIssue(key)` pushes a history entry. `closeIssue()` unwinds every entry the modal pushed.
-  If the page was loaded with `?issue=`, it removes the param instead.
+  If the page was loaded with `?issue=`, it also removes the param from that first entry.
 - Modal contracts (issue agent): `IssueDetailModal({ issueKey, onClose })` and
   `CreateIssueModal({ open, defaults, onClose })`. **Each `openCreateIssue` call mounts a fresh
   `CreateIssueModal` (new React key)**, so read `defaults` in initial state. `defaults.projectKey`
@@ -206,18 +216,22 @@ Pickers: all share `PickerCommonProps`:
 for the issue side panel, or icon/avatar-only for rows and cards), `disabled?` (read-only display), `placeholder?`,
 `className?`, `id?`, `aria-label?`, `data-testid?`, `trigger?: ReactElement` (custom trigger. It must
 forward ref and props, as all ui buttons do), `align?`, `open?`/`onOpenChange?`.
-Inside a `Field` they are labelled automatically. They call `onChange` only when the value actually changes.
+Inside a `Field` they are wired to its label automatically, but their accessible name is the
+value ("Priority: Medium"): `UserPicker` and `IssuePicker` / `ParentPicker` serve many fields, so
+pass `fieldLabel` ("Assignee") to have them announced as "Assignee: Sam Patel" (when empty, the
+text the trigger shows: "Assignee: Unassigned", "Epic: Select epic").
+They call `onChange` only when the value actually changes.
 
 | Picker | value → onChange |
 |---|---|
 | `TypeSelect` | `value: IssueType` → `onChange(type)`. `types?` restricts the options (use `allowedTypeChanges(issue.type)` when editing) |
 | `StatusSelect` | `projectKey`, `value: ID \| Status \| null` → `onChange(statusId, status)`. `variant` also accepts **`'button'`** (the prominent coloured status button). `statuses?` avoids a fetch |
 | `PrioritySelect` | `value: Priority` → `onChange(priority)` |
-| `UserPicker` | `projectKey`, `value: ID \| UserSummary \| null` → `onChange(userId \| null, user \| null)`. Options: `allowUnassigned? = true`, `unassignedLabel?`, `avatarSize?` |
+| `UserPicker` | `projectKey`, `value: ID \| UserSummary \| null` → `onChange(userId \| null, user \| null)`. Options: `allowUnassigned? = true`, `unassignedLabel?`, `avatarSize?`, `fieldLabel?` |
 | `LabelMultiSelect` | `projectKey`, `value: ID[] \| Label[]` → `onChange(labelIds, labels)`. Options: `allowCreate? = true` (inline "Create “x”"), `commitMode?: 'immediate' \| 'onClose'`. Use **`onClose`** for inline editing, so one PATCH fires when the popover closes: it applies only the labels picked in the popover to the live value, and closing without a change calls nothing |
 | `SprintSelect` | `projectKey`, `value: ID \| {id,name,state} \| null` (null = Backlog) → `onChange(sprintId \| null, sprint \| null)`. Options: `allowBacklog?`, `backlogLabel?` |
 | `ParentPicker` | `projectKey`, `childType`, `value: {id,key,summary,type} \| null` → `onChange(issue \| null)`. Epics for story, task and bug. Stories, tasks and bugs for subtasks (required, so no "None"). Disabled for epics |
-| `IssuePicker` | `value: {id,key,summary,type} \| null` → `onChange(issue \| null)`. Options: `projectKey?`, `types?`, `excludeIds?`, `allowNone?`, `noneLabel?`, `searchPlaceholder?` (server search on key or text, for links) |
+| `IssuePicker` | `value: {id,key,summary,type} \| null` → `onChange(issue \| null)`. Options: `projectKey?`, `types?`, `excludeIds?`, `allowNone?`, `noneLabel?`, `searchPlaceholder?`, `fieldLabel?` (server search on key or text, for links) |
 | `ProjectSelect` | `value: projectKey \| null` → `onChange(key, project)`. `filter?: (p) => boolean` (for example `p.myRole !== 'viewer'`) |
 
 `PickerTrigger`/`PickerPlaceholder` are exported for building extra pickers on `Combobox`.
@@ -231,7 +245,7 @@ Inside a `Field` they are labelled automatically. They call `onChange` only when
 <LabelMultiSelect variant="inline" commitMode="onClose" projectKey={issue.projectKey}
   value={issue.labels} onChange={(labelIds) => update.mutate({ labelIds })} />
 // form
-<Field label="Assignee"><UserPicker projectKey={key} value={assigneeId} onChange={setAssigneeId} /></Field>
+<Field label="Assignee"><UserPicker fieldLabel="Assignee" projectKey={key} value={assigneeId} onChange={setAssigneeId} /></Field>
 // card: avatar-only
 <UserPicker variant="compact" projectKey={key} value={issue.assignee} onChange={…} />
 ```
@@ -265,13 +279,21 @@ Inside a `Field` they are labelled automatically. They call `onChange` only when
   `chipStyle(hex)` (use with the `chip-tint` class), `LABEL_COLORS` (swatches), `DEFAULT_LABEL_COLOR`, `isHexColor`.
 - `activity`: `describeActivity(a, { withIssue? })` returns the sentence without the actor ("changed Status
   of GB-12 from To Do to In Progress", "created the issue", "added a comment", "started sprint GB
-  Sprint 2"…). `activitySentence(a)` includes the actor. `ACTIVITY_FIELD_LABELS`.
+  Sprint 2"…). `activitySentence(a)` includes the actor. `ACTIVITY_FIELD_LABELS`. User-entered values in
+  the sentence are bidi isolates: `splitIsolates(sentence)` puts them at odd indexes to render in `<bdi>`, and
+  `actorName(a)` is the actor's name for a `<bdi>` (ActivityItem does both).
 - `projectKey`: `projectKeyOf('GB-12') === 'GB'`, `normalizeKey`, `isIssueKey`,
-  `suggestProjectKey(name)` ("Gene Board" gives "GB"), `validateProjectKey(key)` (returns an error message or null).
+  `suggestProjectKey(name)` ("Gene Board" gives "GB", "Müller Projekt" gives "MP"), `validateProjectKey(key)` (returns an error message or null).
+- `chars`: `charCount(s)` (characters as the API counts them), `charLimitProps(max, value, onChange, handlers?)`
+  (`maxLength`, `onChange` and composition handlers that limit a raw `<input>`/`<textarea>` to `max`
+  characters, cutting IME text when it is committed; pass your own `onCompositionStart`/`End` as `handlers`).
 - `errors`: `errorMessage(err, fallback?)`, `fieldErrors(err)` (server `fields`), `isApiStatus(err, 404)`.
-- `format`: `pluralize(n, 'issue')`, `truncate(s, n)`, `issueUrl(key)` (absolute, for copy link), `percent(a, b)`.
+- `format`: `pluralize(n, 'issue')`, `truncate(s, n)` (never splits an emoji), `splitGraphemes(s)` (characters as
+  a reader sees them, for cutting display text), `issueUrl(key)` (absolute, for copy link), `percent(a, b)`.
 - `hooks`: `useDebouncedValue(v, ms?)`, `useLocalStorageState(key, init)`, `useHotkey(key, fn,
-  { mod?, shift?, allowInInputs?, enabled? })`, `useDocumentTitle(title)`, `copyToClipboard(text)`, `isTypingTarget`.
+  { mod?, shift?, allowInInputs?, enabled? })`, `useDocumentTitle(title)`, `copyToClipboard(text)` (falls
+  back to the legacy copy command on plain-http LAN addresses), `isTypingTarget`,
+  `useEditorFocusReturn(open)` (an inline editor gives focus back to the button it replaced).
 - `useProjectRole(key) → { role, canEdit, isAdmin, isLoading }` · `useCurrentProjectKey()` ·
   `recentProjects`: `useRecentProjectKeys()`, `recordRecentProject(key)` (ProjectLayout records visits).
 

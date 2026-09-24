@@ -6,6 +6,7 @@ import { safeNextPath, useAuth } from '@/auth/AuthProvider'
 import { Button } from '@/components/ui/Button'
 import { Field } from '@/components/ui/Field'
 import { Input } from '@/components/ui/Input'
+import { charCount } from '@/lib/chars'
 import { errorMessage } from '@/lib/errors'
 import { AuthLayout, FormAlert, isEmail, PasswordInput } from './AuthLayout'
 
@@ -40,7 +41,7 @@ export function RegisterPage() {
     const nextErrors: typeof errors = {}
     const n = name.trim()
     if (!n) nextErrors.name = 'Enter your name'
-    else if (n.length > 100) nextErrors.name = 'Name must be at most 100 characters'
+    else if (charCount(n) > 100) nextErrors.name = 'Name must be at most 100 characters'
     if (!email.trim()) nextErrors.email = 'Enter your email'
     else if (!isEmail(email)) nextErrors.email = 'Enter a valid email address'
     if (password.length < 8) nextErrors.password = 'Use at least 8 characters'

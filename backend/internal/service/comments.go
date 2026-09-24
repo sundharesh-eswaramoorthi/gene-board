@@ -54,8 +54,8 @@ func (s *Service) CreateComment(ctx context.Context, userID int64, issueKey stri
 		if err != nil {
 			return fmt.Errorf("create comment: %w", err)
 		}
-		preview := truncateRunes(body, commentPreviewLen)
-		if err := t.logActivity(ctx, userID, issueEntry(acc.issue, ActionCommentCreated).withValues("", nil, &preview)); err != nil {
+		// No stored preview: the activity lists show the comment's current text (activity.go).
+		if err := t.logActivity(ctx, userID, issueEntry(acc.issue, ActionCommentCreated).withComment(c.ID)); err != nil {
 			return err
 		}
 		t.publish(acc.project.ID, realtime.CommentChanged, acc.project.Key, acc.issue.Key, userID)
@@ -86,6 +86,9 @@ func (s *Service) UpdateComment(ctx context.Context, userID, commentID int64, in
 		}
 		if body != c.Body {
 			if c, err = t.q.UpdateCommentBody(ctx, db.UpdateCommentBodyParams{ID: c.ID, Body: body}); err != nil {
+				if isNoRows(err) { // deleted (or its issue deleted) since commentAccess read it
+					return errCommentNotFound
+				}
 				return fmt.Errorf("update comment: %w", err)
 			}
 			t.publish(acc.project.ID, realtime.CommentChanged, acc.project.Key, acc.issue.Key, userID)

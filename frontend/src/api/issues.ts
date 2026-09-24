@@ -82,7 +82,8 @@ export function useCreateIssue() {
 
 /**
  * PATCH /issues/{issueKey} — send only changed fields (`null` clears a nullable field,
- * `labelIds` replaces the set). The returned IssueDetail is written to the cache.
+ * `labelIds` replaces the set). The returned IssueDetail is written to the cache; linked
+ * issues (in any project) are refreshed too, as they show its summary and status.
  */
 export function useUpdateIssue(issueKey: string) {
   const qc = useQueryClient()
@@ -91,14 +92,15 @@ export function useUpdateIssue(issueKey: string) {
       api.patch<IssueDetail>(`/issues/${seg(normalizeKey(issueKey))}`, input),
     onSuccess: (issue) => {
       qc.setQueryData(qk.issue(issue.key), issue)
-      return invalidateProject(qc, issue.projectKey)
+      return invalidateProject(qc, issue.projectKey, { linkedIssues: true })
     },
   })
 }
 
 /**
  * DELETE /issues/{issueKey} — variable is the issue key. Subtasks are deleted too.
- * The issue's cached detail/comments/activity are dropped (close any open modal first).
+ * The issue's cached detail/comments/activity are dropped (close any open modal first), and
+ * linked issues (in any project) are refreshed so they stop listing it.
  */
 export function useDeleteIssue() {
   const qc = useQueryClient()
@@ -106,7 +108,7 @@ export function useDeleteIssue() {
     mutationFn: (issueKey: string) => api.delete(`/issues/${seg(normalizeKey(issueKey))}`),
     onSuccess: (_data, issueKey) => {
       qc.removeQueries({ queryKey: qk.issue(issueKey) })
-      return invalidateProject(qc, projectKeyOf(issueKey), { projects: true })
+      return invalidateProject(qc, projectKeyOf(issueKey), { projects: true, linkedIssues: true })
     },
   })
 }
@@ -118,7 +120,8 @@ export type MoveIssueVariables = MoveIssueInput & { issueKey: string }
  * POST /issues/{issueKey}/move — drag & drop. `{ issueKey, statusId?, sprintId?, prevIssueId?,
  * nextIssueId? }`; omit `sprintId` to keep the sprint, `null` moves to the backlog; neighbours
  * are the issues directly above/below in the destination list. Resolves after the project's
- * active queries refetched, so optimistic UI can be dropped without flicker.
+ * active queries refetched, so optimistic UI can be dropped without flicker. Linked issues
+ * (in any project) are refreshed too, as they show its status.
  */
 export function useMoveIssue() {
   const qc = useQueryClient()
@@ -131,6 +134,6 @@ export function useMoveIssue() {
       if (input.nextIssueId != null) body.nextIssueId = input.nextIssueId
       return api.post<Issue>(`/issues/${seg(normalizeKey(issueKey))}/move`, body)
     },
-    onSuccess: (issue) => invalidateProject(qc, issue.projectKey),
+    onSuccess: (issue) => invalidateProject(qc, issue.projectKey, { linkedIssues: true }),
   })
 }

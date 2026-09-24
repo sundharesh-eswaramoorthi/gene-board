@@ -27,7 +27,9 @@
 
   --fg: #172033;
   --fg-muted: #4f5a6d;
-  --fg-subtle: #7b8496;
+  /* ≥ 4.5:1 on every surface and primary/danger/success/warning/info-subtle box: it carries
+     real (small) text */
+  --fg-subtle: #636b7c;
 
   --primary: #3b5bdb;
   --primary-hover: #3049c0;
@@ -53,9 +55,12 @@
 
   --ring: #4c6ef5;
 
-  /* chip-tint: how much of the chip colour goes into its text / background */
-  --chip-text-mix: 72%;
+  /* chip-tint: how much of the chip colour goes into its text / background, and the range
+     the text's OKLCH lightness is kept in (4.5:1 on every surface, whatever the colour) */
+  --chip-text-mix: 50%;
   --chip-bg-mix: 15%;
+  --chip-text-min-l: 0;
+  --chip-text-max-l: 0.48;
 
   --elevation-card: 0 1px 1px rgb(23 32 51 / 0.1), 0 0 1px rgb(23 32 51 / 0.2);
   --elevation-raised: 0 8px 16px -4px rgb(23 32 51 / 0.2), 0 0 1px rgb(23 32 51 / 0.24);
@@ -78,7 +83,7 @@
 
   --fg: #e6e8ee;
   --fg-muted: #a6acba;
-  --fg-subtle: #767d8c;
+  --fg-subtle: #8e95a4; /* ≥ 4.5:1, same surfaces and boxes as in light */
 
   --primary: #7c95ff;
   --primary-hover: #97aaff;
@@ -106,6 +111,8 @@
 
   --chip-text-mix: 52%;
   --chip-bg-mix: 24%;
+  --chip-text-min-l: 0.72;
+  --chip-text-max-l: 1;
 
   --elevation-card: 0 1px 1px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.04);
   --elevation-raised: 0 8px 16px -4px rgb(0 0 0 / 0.5), 0 0 0 1px rgb(255 255 255 / 0.06);
@@ -223,12 +230,20 @@
 
 /*
  * Tinted chip driven by a runtime colour: set `--chip-color` inline (see `chipStyle()` in
- * src/lib/colors.ts). Text and background are mixed with the theme so any hex colour stays
- * legible in both light and dark mode.
+ * src/lib/colors.ts). Text and background are mixed with the theme; the palette colours
+ * (LABEL_COLORS, EPIC_COLORS) reach 4.5:1 from the mix alone, and where relative colours are
+ * supported the text's lightness is also clamped, so any hex colour stays legible in both
+ * light and dark mode.
  */
 @utility chip-tint {
   color: color-mix(in oklab, var(--chip-color, var(--neutral)) var(--chip-text-mix), var(--fg));
   background-color: color-mix(in oklab, var(--chip-color, var(--neutral)) var(--chip-bg-mix), transparent);
+  @supports (color: oklch(from red clamp(0, l, 1) c h)) {
+    color: oklch(
+      from color-mix(in oklab, var(--chip-color, var(--neutral)) var(--chip-text-mix), var(--fg))
+        clamp(var(--chip-text-min-l), l, var(--chip-text-max-l)) c h
+    );
+  }
 }
 
 /* Thin, token-coloured scrollbars for scroll containers. */

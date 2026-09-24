@@ -46,7 +46,8 @@ test('issue view: status, type, sprint and due date; comment edit/delete; unlink
   await comments.getByRole('button', { name: 'Edit', exact: true }).click()
   await comments.getByRole('textbox', { name: 'Edit comment' }).fill('Final wording of the comment')
   await comments.getByRole('button', { name: 'Save', exact: true }).click()
-  await expect(comments.getByText('Final wording of the comment')).toBeVisible()
+  // The saved text as rendered: the read-only editor may still hold it for a moment.
+  await expect(comments.getByRole('paragraph').filter({ hasText: 'Final wording of the comment' })).toBeVisible()
   await expect(comments.getByText('(edited)')).toBeVisible()
   await comments.getByRole('button', { name: 'Delete', exact: true }).click()
   await page.getByRole('alertdialog').getByRole('button', { name: /^Delete/ }).click()

@@ -1,13 +1,14 @@
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCheck, History, Info, Plus, Trash2 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { useBacklog, useEpics } from '@/api/board'
-import { useIssues, useMoveIssue } from '@/api/issues'
+import { api } from '@/api/client'
+import { useMoveIssue } from '@/api/issues'
 import { qk } from '@/api/queryKeys'
 import { useCreateSprint, useDeleteSprint } from '@/api/sprints'
 import { useStatuses } from '@/api/statuses'
-import type { Issue, Project, Sprint } from '@/api/types'
+import type { ID, Issue, Page, Project, Sprint } from '@/api/types'
 import { useCreateIssueModal, useIssueModal } from '@/app/ModalsProvider'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { useCurrentProject } from '@/components/layout/ProjectLayout'
@@ -84,7 +85,7 @@ function BacklogView({ project }: { project: Project }) {
   const [panelOpen, setPanelOpen] = useLocalStorageState(PANEL_STORAGE_KEY, defaultPanelOpen)
   const [collapsed, setCollapsed] = useLocalStorageState<ContainerId[]>(`gb-backlog-collapsed-${projectKey}`, [])
   const [dialog, setDialog] = useState<SprintDialogState | null>(null)
-  const [completing, setCompleting] = useState<Sprint | null>(null)
+  const [completingId, setCompletingId] = useState<ID | null>(null)
   const [pending, setPending] = useState<PendingMove[]>([])
   const moveToken = useRef(0)
 
@@ -182,7 +183,7 @@ function BacklogView({ project }: { project: Project }) {
     startSprint: (sprint) => setDialog({ type: 'start', sprint }),
     editSprint: (sprint) => setDialog({ type: 'edit', sprint }),
     deleteSprint: handleDeleteSprint,
-    completeSprint: setCompleting,
+    completeSprint: (sprint) => setCompletingId(sprint.id),
     createSprint: () =>
       createSprint.mutate(
         {},
@@ -199,10 +200,17 @@ function BacklogView({ project }: { project: Project }) {
     ? (containers.find((c) => c.sprint?.id === dialog.sprint.id)?.issues.length ?? dialog.sprint.issueCount)
     : 0
 
+  // The Complete sprint dialog shows while the backlog lists its sprint as active: when a
+  // teammate completes it, the dialog goes away instead of offering a completion that can only fail.
+  const completingEntry =
+    completingId != null
+      ? backlog.data?.sprints.find((s) => s.sprint.id === completingId && s.sprint.state === 'active')
+      : undefined
+
   let body
   if (backlog.isPending) {
     body = <BacklogSkeleton sections={flat ? 1 : 2} />
-  } else if (backlog.isError) {
+  } else if (backlog.isLoadingError) {
     body = (
       <div className="rounded-lg border border-border">
         <ErrorState error={backlog.error} title="Couldn’t load the backlog" onRetry={() => void backlog.refetch()} />
@@ -280,7 +288,7 @@ function BacklogView({ project }: { project: Project }) {
             {flat && canEdit && backlog.data && backlog.data.sprints.length > 0 && (
               <LeftoverSprints
                 sprints={backlog.data.sprints.map((s) => s.sprint)}
-                onComplete={setCompleting}
+                onComplete={(sprint) => setCompletingId(sprint.id)}
                 onDelete={(sprint) => confirmDeleteSprint(sprint, sprint.issueCount)}
               />
             )}
@@ -306,23 +314,61 @@ function BacklogView({ project }: { project: Project }) {
           onClose={() => setDialog(null)}
         />
       )}
-      {completing && (
+      {completingEntry && (
         <BacklogCompleteSprint
-          key={completing.id}
+          key={completingEntry.sprint.id}
           project={project}
-          sprint={completing}
-          sprintIssues={backlog.data?.sprints.find((s) => s.sprint.id === completing.id)?.issues ?? []}
-          onClose={() => setCompleting(null)}
+          sprint={completingEntry.sprint}
+          sprintIssues={completingEntry.issues}
+          onClose={() => setCompletingId(null)}
         />
       )}
     </BacklogActionsContext>
   )
 }
 
+/** Largest page GET /issues serves (SPEC §5: limit max 200). */
+const ISSUES_PAGE_LIMIT = 200
+
+/**
+ * Every open subtask of a sprint, paging past the API's 200-row limit: the newest subtasks come
+ * last, and a big sprint must not lose them from the stranded-subtask warning.
+ */
+function useOpenSprintSubtasks(projectKey: string, sprintId: ID) {
+  return useQuery({
+    // Lives under ['issues'] so every issue mutation / realtime event refreshes it.
+    queryKey: [...qk.issues(), 'open-sprint-subtasks', projectKey, sprintId] as const,
+    // Dropped when the dialog closes: a reopened dialog waits for fresh subtasks instead of
+    // offering submit on a cached list whose parents may have been finished meanwhile.
+    gcTime: 0,
+    queryFn: async ({ signal }) => {
+      // Sorted by key, not rank: a re-rank between pages can't skip a subtask.
+      const params = {
+        project: projectKey,
+        sprintId,
+        type: 'subtask',
+        statusCategory: ['todo', 'in_progress'],
+        sort: 'key',
+      }
+      const items: Issue[] = []
+      const seen = new Set<ID>()
+      for (let offset = 0; ; offset += ISSUES_PAGE_LIMIT) {
+        const page = await api.get<Page<Issue>>('/issues', { ...params, limit: ISSUES_PAGE_LIMIT, offset }, { signal })
+        for (const issue of page.items) {
+          if (seen.has(issue.id)) continue
+          seen.add(issue.id)
+          items.push(issue)
+        }
+        if (page.items.length < ISSUES_PAGE_LIMIT || offset + ISSUES_PAGE_LIMIT >= page.total) return items
+      }
+    },
+  })
+}
+
 /**
  * Complete sprint from the backlog (Jira completes in place, so the next sprint can be started
- * right away). The backlog lists only stories, tasks and bugs; the sprint's subtasks are
- * loaded too, so open subtasks of done issues are pointed out.
+ * right away). The backlog lists only stories, tasks and bugs; the sprint's open subtasks are
+ * loaded too (submit waits for them), so open subtasks of done issues are pointed out.
  */
 function BacklogCompleteSprint({
   project,
@@ -336,8 +382,8 @@ function BacklogCompleteSprint({
   onClose: () => void
 }) {
   const statuses = useStatuses(project.key)
-  const subtasks = useIssues({ project: project.key, sprintId: sprint.id, type: 'subtask', limit: 200 })
-  const issues = useMemo(() => [...sprintIssues, ...(subtasks.data?.items ?? [])], [sprintIssues, subtasks.data])
+  const subtasks = useOpenSprintSubtasks(project.key, sprint.id)
+  const issues = useMemo(() => [...sprintIssues, ...(subtasks.data ?? [])], [sprintIssues, subtasks.data])
   return (
     <CompleteSprintDialog
       open
@@ -345,8 +391,9 @@ function BacklogCompleteSprint({
       projectKey={project.key}
       sprint={sprint}
       issues={issues}
+      issuesLoading={subtasks.isPending}
       statuses={statuses.data ?? []}
-      allowNewSprint={project.type === 'scrum'}
+      kanban={project.type === 'kanban'}
     />
   )
 }

@@ -11,8 +11,8 @@ import (
 
 const createActivity = `-- name: CreateActivity :exec
 
-INSERT INTO activities (project_id, issue_id, issue_key, actor_id, action, field, old_value, new_value)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO activities (project_id, issue_id, issue_key, actor_id, action, field, old_value, new_value, comment_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type CreateActivityParams struct {
@@ -24,6 +24,7 @@ type CreateActivityParams struct {
 	Field     *string `db:"field"`
 	OldValue  *string `db:"old_value"`
 	NewValue  *string `db:"new_value"`
+	CommentID *int64  `db:"comment_id"`
 }
 
 // Activity / audit log. All list queries return the same column set so the service can
@@ -38,28 +39,40 @@ func (q *Queries) CreateActivity(ctx context.Context, arg CreateActivityParams) 
 		arg.Field,
 		arg.OldValue,
 		arg.NewValue,
+		arg.CommentID,
 	)
 	return err
 }
 
 const listIssueActivities = `-- name: ListIssueActivities :many
-SELECT a.id, a.project_id, a.issue_id, a.issue_key, a.actor_id, a.action, a.field, a.old_value, a.new_value, a.created_at, p.key AS project_key, u.name AS actor_name, u.email AS actor_email
+SELECT a.id, a.project_id, a.issue_id, a.issue_key, a.actor_id, a.action, a.field, a.old_value, a.new_value, a.created_at, a.comment_id, p.key AS project_key, u.name AS actor_name, u.email AS actor_email,
+       COALESCE(left(c.body, $1::int), '')::text AS comment_preview
 FROM activities a
 JOIN projects p ON p.id = a.project_id
 LEFT JOIN users u ON u.id = a.actor_id
-WHERE a.issue_id = $1::bigint
+LEFT JOIN comments c ON c.id = a.comment_id
+WHERE a.issue_id = $2::bigint
 ORDER BY a.created_at DESC, a.id DESC
 `
 
-type ListIssueActivitiesRow struct {
-	Activity   Activity `db:"activity"`
-	ProjectKey string   `db:"project_key"`
-	ActorName  *string  `db:"actor_name"`
-	ActorEmail *string  `db:"actor_email"`
+type ListIssueActivitiesParams struct {
+	CommentPreviewLen int32 `db:"comment_preview_len"`
+	IssueID           int64 `db:"issue_id"`
 }
 
-func (q *Queries) ListIssueActivities(ctx context.Context, issueID int64) ([]ListIssueActivitiesRow, error) {
-	rows, err := q.db.Query(ctx, listIssueActivities, issueID)
+type ListIssueActivitiesRow struct {
+	Activity       Activity `db:"activity"`
+	ProjectKey     string   `db:"project_key"`
+	ActorName      *string  `db:"actor_name"`
+	ActorEmail     *string  `db:"actor_email"`
+	CommentPreview string   `db:"comment_preview"`
+}
+
+// The list queries return, as comment_preview, the start of the current body of a
+// comment.created row's comment (” for other rows, and once the comment or its issue is
+// deleted): text edited out of a comment, or deleted with it, never stays in the history.
+func (q *Queries) ListIssueActivities(ctx context.Context, arg ListIssueActivitiesParams) ([]ListIssueActivitiesRow, error) {
+	rows, err := q.db.Query(ctx, listIssueActivities, arg.CommentPreviewLen, arg.IssueID)
 	if err != nil {
 		return nil, err
 	}
@@ -78,9 +91,11 @@ func (q *Queries) ListIssueActivities(ctx context.Context, issueID int64) ([]Lis
 			&i.Activity.OldValue,
 			&i.Activity.NewValue,
 			&i.Activity.CreatedAt,
+			&i.Activity.CommentID,
 			&i.ProjectKey,
 			&i.ActorName,
 			&i.ActorEmail,
+			&i.CommentPreview,
 		); err != nil {
 			return nil, err
 		}
@@ -93,30 +108,39 @@ func (q *Queries) ListIssueActivities(ctx context.Context, issueID int64) ([]Lis
 }
 
 const listProjectActivities = `-- name: ListProjectActivities :many
-SELECT a.id, a.project_id, a.issue_id, a.issue_key, a.actor_id, a.action, a.field, a.old_value, a.new_value, a.created_at, p.key AS project_key, u.name AS actor_name, u.email AS actor_email
+SELECT a.id, a.project_id, a.issue_id, a.issue_key, a.actor_id, a.action, a.field, a.old_value, a.new_value, a.created_at, a.comment_id, p.key AS project_key, u.name AS actor_name, u.email AS actor_email,
+       COALESCE(left(c.body, $1::int), '')::text AS comment_preview
 FROM activities a
 JOIN projects p ON p.id = a.project_id
 LEFT JOIN users u ON u.id = a.actor_id
-WHERE a.project_id = $1
+LEFT JOIN comments c ON c.id = a.comment_id
+WHERE a.project_id = $2
 ORDER BY a.created_at DESC, a.id DESC
-LIMIT $3::int OFFSET $2::bigint
+LIMIT $4::int OFFSET $3::bigint
 `
 
 type ListProjectActivitiesParams struct {
-	ProjectID  int64 `db:"project_id"`
-	Skip       int64 `db:"skip"`
-	MaxResults int32 `db:"max_results"`
+	CommentPreviewLen int32 `db:"comment_preview_len"`
+	ProjectID         int64 `db:"project_id"`
+	Skip              int64 `db:"skip"`
+	MaxResults        int32 `db:"max_results"`
 }
 
 type ListProjectActivitiesRow struct {
-	Activity   Activity `db:"activity"`
-	ProjectKey string   `db:"project_key"`
-	ActorName  *string  `db:"actor_name"`
-	ActorEmail *string  `db:"actor_email"`
+	Activity       Activity `db:"activity"`
+	ProjectKey     string   `db:"project_key"`
+	ActorName      *string  `db:"actor_name"`
+	ActorEmail     *string  `db:"actor_email"`
+	CommentPreview string   `db:"comment_preview"`
 }
 
 func (q *Queries) ListProjectActivities(ctx context.Context, arg ListProjectActivitiesParams) ([]ListProjectActivitiesRow, error) {
-	rows, err := q.db.Query(ctx, listProjectActivities, arg.ProjectID, arg.Skip, arg.MaxResults)
+	rows, err := q.db.Query(ctx, listProjectActivities,
+		arg.CommentPreviewLen,
+		arg.ProjectID,
+		arg.Skip,
+		arg.MaxResults,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -135,9 +159,11 @@ func (q *Queries) ListProjectActivities(ctx context.Context, arg ListProjectActi
 			&i.Activity.OldValue,
 			&i.Activity.NewValue,
 			&i.Activity.CreatedAt,
+			&i.Activity.CommentID,
 			&i.ProjectKey,
 			&i.ActorName,
 			&i.ActorEmail,
+			&i.CommentPreview,
 		); err != nil {
 			return nil, err
 		}
@@ -150,30 +176,39 @@ func (q *Queries) ListProjectActivities(ctx context.Context, arg ListProjectActi
 }
 
 const listUserFeedActivities = `-- name: ListUserFeedActivities :many
-SELECT a.id, a.project_id, a.issue_id, a.issue_key, a.actor_id, a.action, a.field, a.old_value, a.new_value, a.created_at, p.key AS project_key, u.name AS actor_name, u.email AS actor_email
+SELECT a.id, a.project_id, a.issue_id, a.issue_key, a.actor_id, a.action, a.field, a.old_value, a.new_value, a.created_at, a.comment_id, p.key AS project_key, u.name AS actor_name, u.email AS actor_email,
+       COALESCE(left(c.body, $1::int), '')::text AS comment_preview
 FROM activities a
 JOIN projects p ON p.id = a.project_id
 LEFT JOIN users u ON u.id = a.actor_id
-WHERE a.project_id IN (SELECT pm.project_id FROM project_members pm WHERE pm.user_id = $1)
+LEFT JOIN comments c ON c.id = a.comment_id
+WHERE a.project_id IN (SELECT pm.project_id FROM project_members pm WHERE pm.user_id = $2)
 ORDER BY a.created_at DESC, a.id DESC
-LIMIT $3::int OFFSET $2::bigint
+LIMIT $4::int OFFSET $3::bigint
 `
 
 type ListUserFeedActivitiesParams struct {
-	UserID     int64 `db:"user_id"`
-	Skip       int64 `db:"skip"`
-	MaxResults int32 `db:"max_results"`
+	CommentPreviewLen int32 `db:"comment_preview_len"`
+	UserID            int64 `db:"user_id"`
+	Skip              int64 `db:"skip"`
+	MaxResults        int32 `db:"max_results"`
 }
 
 type ListUserFeedActivitiesRow struct {
-	Activity   Activity `db:"activity"`
-	ProjectKey string   `db:"project_key"`
-	ActorName  *string  `db:"actor_name"`
-	ActorEmail *string  `db:"actor_email"`
+	Activity       Activity `db:"activity"`
+	ProjectKey     string   `db:"project_key"`
+	ActorName      *string  `db:"actor_name"`
+	ActorEmail     *string  `db:"actor_email"`
+	CommentPreview string   `db:"comment_preview"`
 }
 
 func (q *Queries) ListUserFeedActivities(ctx context.Context, arg ListUserFeedActivitiesParams) ([]ListUserFeedActivitiesRow, error) {
-	rows, err := q.db.Query(ctx, listUserFeedActivities, arg.UserID, arg.Skip, arg.MaxResults)
+	rows, err := q.db.Query(ctx, listUserFeedActivities,
+		arg.CommentPreviewLen,
+		arg.UserID,
+		arg.Skip,
+		arg.MaxResults,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -192,9 +227,11 @@ func (q *Queries) ListUserFeedActivities(ctx context.Context, arg ListUserFeedAc
 			&i.Activity.OldValue,
 			&i.Activity.NewValue,
 			&i.Activity.CreatedAt,
+			&i.Activity.CommentID,
 			&i.ProjectKey,
 			&i.ActorName,
 			&i.ActorEmail,
+			&i.CommentPreview,
 		); err != nil {
 			return nil, err
 		}

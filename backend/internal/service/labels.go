@@ -40,7 +40,7 @@ func (s *Service) ListLabels(ctx context.Context, userID int64, key string) ([]d
 
 // CreateLabel creates a label (members may create labels). Colours are stored upper-case.
 func (s *Service) CreateLabel(ctx context.Context, userID int64, key string, in CreateLabelInput) (dto.Label, error) {
-	name := strings.TrimSpace(in.Name)
+	name := cleanName(in.Name)
 	color := strings.ToUpper(strings.TrimSpace(in.Color))
 	if color == "" {
 		color = defaultLabelColor
@@ -71,7 +71,8 @@ func (s *Service) CreateLabel(ctx context.Context, userID int64, key string, in 
 	return out, err
 }
 
-// UpdateLabel renames or recolours a label (admin only).
+// UpdateLabel renames or recolours a label (admin only). The label is locked first, so a
+// concurrent edit of the other field is kept and a concurrent delete answers 404.
 func (s *Service) UpdateLabel(ctx context.Context, userID int64, key string, labelID int64, in UpdateLabelInput) (dto.Label, error) {
 	var out dto.Label
 	err := s.inTx(ctx, func(t *txn) error {
@@ -79,8 +80,8 @@ func (s *Service) UpdateLabel(ctx context.Context, userID int64, key string, lab
 		if err != nil {
 			return err
 		}
-		cur, err := projectLabel(ctx, t.q, acc.project.ID, labelID)
-		if err != nil {
+		cur, err := t.q.LockLabel(ctx, labelID)
+		if cur, err = labelInProject(cur, err, acc.project.ID); err != nil {
 			return err
 		}
 		next := db.UpdateLabelParams{ID: cur.ID, Name: cur.Name, Color: cur.Color}
@@ -89,7 +90,7 @@ func (s *Service) UpdateLabel(ctx context.Context, userID int64, key string, lab
 			if in.Name.Null {
 				fe.Add("name", "must not be null")
 			} else {
-				next.Name = strings.TrimSpace(in.Name.Value)
+				next.Name = cleanName(in.Name.Value)
 				checkLength(&fe, "name", next.Name, 1, maxLabelName)
 			}
 		}
@@ -112,9 +113,6 @@ func (s *Service) UpdateLabel(ctx context.Context, userID int64, key string, lab
 		if isUniqueViolation(err) {
 			return duplicateLabel(next.Name)
 		}
-		if isNoRows(err) { // deleted since projectLabel read it
-			return errLabelNotFound
-		}
 		if err != nil {
 			return fmt.Errorf("update label: %w", err)
 		}
@@ -132,8 +130,8 @@ func (s *Service) DeleteLabel(ctx context.Context, userID int64, key string, lab
 		if err != nil {
 			return err
 		}
-		label, err := projectLabel(ctx, t.q, acc.project.ID, labelID)
-		if err != nil {
+		label, err := t.q.GetLabel(ctx, labelID)
+		if label, err = labelInProject(label, err, acc.project.ID); err != nil {
 			return err
 		}
 		if err := t.q.DeleteLabel(ctx, label.ID); err != nil {
@@ -144,8 +142,8 @@ func (s *Service) DeleteLabel(ctx context.Context, userID int64, key string, lab
 	})
 }
 
-func projectLabel(ctx context.Context, q *db.Queries, projectID, labelID int64) (db.Label, error) {
-	label, err := q.GetLabel(ctx, labelID)
+// labelInProject checks a label read (or lock) result: 404 unless it exists in projectID.
+func labelInProject(label db.Label, err error, projectID int64) (db.Label, error) {
 	if isNoRows(err) || (err == nil && label.ProjectID != projectID) {
 		return db.Label{}, errLabelNotFound
 	}

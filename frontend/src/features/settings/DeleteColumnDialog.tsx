@@ -24,10 +24,10 @@ export interface DeleteColumnDialogProps {
 }
 
 /** Where the column's issues go by default: the nearest column of the same category, else the one before it. */
-function defaultTarget(status: Status, statuses: readonly Status[]): ID | undefined {
+function defaultTarget(status: Status, statuses: readonly Status[]): Status | undefined {
   const others = statuses.filter((s) => s.id !== status.id)
   const byDistance = [...others].sort((a, b) => Math.abs(a.position - status.position) - Math.abs(b.position - status.position))
-  return (byDistance.find((s) => s.category === status.category) ?? byDistance[0])?.id
+  return byDistance.find((s) => s.category === status.category) ?? byDistance[0]
 }
 
 /**
@@ -36,7 +36,7 @@ function defaultTarget(status: Status, statuses: readonly Status[]): ID | undefi
  */
 export function DeleteColumnDialog({ projectKey, status, statuses, onClose }: DeleteColumnDialogProps) {
   const others = statuses.filter((s) => s.id !== status.id)
-  const [moveTo, setMoveTo] = useState<ID | undefined>(() => defaultTarget(status, statuses))
+  const [choice, setChoice] = useState<ID | undefined>()
   const [conflict, setConflict] = useState(false)
   const count = useIssues({ project: projectKey, statusId: status.id, limit: 1 })
   const remove = useDeleteStatus(projectKey)
@@ -44,7 +44,10 @@ export function DeleteColumnDialog({ projectKey, status, statuses, onClose }: De
   const issueCount = count.data?.total
   // Unknown count (still loading / failed) or a 409 → ask where the issues go.
   const needsTarget = conflict || issueCount == null || issueCount > 0
-  const target = others.find((s) => s.id === moveTo)
+  // A chosen column that was deleted meanwhile is no longer an option: fall back to the default
+  // (what the select then shows), so what is sent always matches what is shown.
+  const target = others.find((s) => s.id === choice) ?? defaultTarget(status, statuses)
+  const moveTo = target?.id
 
   const submit = (e: FormEvent) => {
     e.preventDefault()
@@ -113,7 +116,7 @@ export function DeleteColumnDialog({ projectKey, status, statuses, onClose }: De
               <Field label="Move issues to" className="min-w-0 flex-1">
                 <Select
                   value={moveTo ?? ''}
-                  onChange={(e) => setMoveTo(e.target.value ? Number(e.target.value) : undefined)}
+                  onChange={(e) => setChoice(e.target.value ? Number(e.target.value) : undefined)}
                   options={others.map((s) => ({ value: s.id, label: s.name }))}
                   data-testid="delete-column-move-to"
                 />

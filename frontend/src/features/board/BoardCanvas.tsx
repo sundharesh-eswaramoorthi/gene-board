@@ -33,6 +33,7 @@ import {
   CollisionMemory,
   createBoardCollisionDetection,
   findColumn,
+  statusIdOfDroppable,
   type ColumnDroppableData,
   type ColumnItems,
 } from './boardDnd'
@@ -222,9 +223,12 @@ function DraggableBoard({
     const state = dragRef.current
     if (!state || !over) return
     const from = findColumn(state.activeId, state.items)
-    const to = findColumn(over.id, state.items)
+    // A column is looked up among the current statuses, not the lists taken at pickup: a column
+    // added during the drag (by a teammate) is a drop target too, and starts out empty.
+    const overColumn = statusIdOfDroppable(over.id)
+    const to = overColumn != null ? (statusById.has(overColumn) ? overColumn : null) : findColumn(over.id, state.items)
     if (from == null || to == null || from === to) return
-    const target = state.items[to]
+    const target = state.items[to] ?? []
     let index = target.length
     if (typeof over.id === 'number') {
       const overIndex = target.indexOf(over.id)

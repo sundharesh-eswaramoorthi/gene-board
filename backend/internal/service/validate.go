@@ -6,7 +6,10 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm"
 
 	"geneboard/internal/dto"
 	"geneboard/internal/httpx"
@@ -59,12 +62,13 @@ func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
 // checkLength validates a (trimmed) string's length in characters. Text PostgreSQL cannot
 // store (NUL characters) is rejected too, so every free-text field is checked through here.
+// A required value must show something: invisible characters alone do not count.
 func checkLength(fe *httpx.FieldErrors, field, value string, minLen, maxLen int) {
 	n := runeLen(value)
 	switch {
 	case !httpx.ValidText(value):
 		fe.Add(field, msgInvalidText)
-	case minLen > 0 && n == 0:
+	case minLen > 0 && !hasVisible(value):
 		fe.Add(field, "is required")
 	case n < minLen:
 		fe.Add(field, fmt.Sprintf("must be at least %d characters", minLen))
@@ -75,6 +79,38 @@ func checkLength(fe *httpx.FieldErrors, field, value string, minLen, maxLen int)
 
 // msgInvalidText reports text with NUL characters (JSON "\u0000"), which cannot be stored.
 const msgInvalidText = "must not contain NUL characters"
+
+// cleanName normalises a name (of a user, project, sprint, column or label) before it is
+// validated and stored: to NFC, so that an accent typed precomposed or decomposed gives the
+// same name (the case-insensitive unique indexes compare code points), and without the
+// white space and invisible characters around it (zero-width spaces, BOMs, bidi controls),
+// which would make a name look like another one or like none. Invisible characters inside
+// a name stay: emoji sequences are joined with them.
+func cleanName(name string) string { return strings.TrimFunc(norm.NFC.String(name), invisible) }
+
+// invisible reports whether r shows nothing on its own: white space, control characters,
+// format characters and other default-ignorable code points (e.g. Hangul fillers). Two
+// kinds of format characters are not invisible: emoji tags, which a subdivision flag ends
+// with, and prepended concatenation marks, which show as signs (e.g. U+0600).
+func invisible(r rune) bool {
+	switch {
+	case unicode.IsSpace(r), unicode.IsControl(r), unicode.Is(unicode.Other_Default_Ignorable_Code_Point, r):
+		return true
+	case emojiTag(r), unicode.Is(unicode.Prepended_Concatenation_Mark, r):
+		return false
+	}
+	return unicode.Is(unicode.Cf, r)
+}
+
+// emojiTag reports whether r is a tag character (U+E0020-U+E007F), as in the flag of Scotland.
+func emojiTag(r rune) bool { return r >= 0xE0020 && r <= 0xE007F }
+
+// hasVisible reports whether s shows something: more than white space, invisible
+// characters, and combining marks (accents, variation selectors) or emoji tags with nothing
+// to go on.
+func hasVisible(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return !invisible(r) && !emojiTag(r) && !unicode.Is(unicode.M, r) })
+}
 
 // checkEnum validates that value is one of values.
 func checkEnum(fe *httpx.FieldErrors, field, value string, values []string) {
@@ -105,12 +141,24 @@ func checkEmail(fe *httpx.FieldErrors, field, email string) {
 	}
 }
 
-// normalizeEmail trims and lower-cases an e-mail address.
-func normalizeEmail(email string) string { return strings.ToLower(strings.TrimSpace(email)) }
+// normalizeEmail trims and lower-cases an e-mail address and brings it to Unicode NFC, so
+// that an accent typed precomposed or decomposed gives the same address (for register,
+// sign-in and adding members alike; migration 00004 converted the stored addresses).
+func normalizeEmail(email string) string {
+	return norm.NFC.String(strings.ToLower(strings.TrimSpace(email)))
+}
 
-// validEmail accepts plain "local@domain.tld" addresses.
+// NormalizeEmail is normalizeEmail for the API layer, which keys sign-in throttling by the
+// account an address signs in to.
+func NormalizeEmail(email string) string { return normalizeEmail(email) }
+
+// validEmail accepts plain "local@domain.tld" addresses. Invisible characters (zero-width
+// spaces, BOMs, no-break spaces, bidi controls, variation selectors) are refused: an address
+// with one would look exactly like another account's.
 func validEmail(email string) bool {
-	if len(email) > maxEmail {
+	if len(email) > maxEmail || strings.ContainsFunc(email, func(r rune) bool {
+		return invisible(r) || unicode.In(r, unicode.Cf, unicode.Variation_Selector)
+	}) {
 		return false
 	}
 	addr, err := mail.ParseAddress(email)
@@ -125,14 +173,6 @@ func validEmail(email string) bool {
 // escapeLike escapes LIKE/ILIKE wildcards so user input matches literally.
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
-}
-
-// truncateRunes shortens s to at most n characters.
-func truncateRunes(s string, n int) string {
-	if runeLen(s) <= n {
-		return s
-	}
-	return string([]rune(s)[:n])
 }
 
 // dedupeIDs returns the distinct ids in ascending order (never nil).

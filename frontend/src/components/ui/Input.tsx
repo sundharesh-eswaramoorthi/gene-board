@@ -1,5 +1,6 @@
 import { Search, X } from 'lucide-react'
 import type { InputHTMLAttributes, ReactNode, Ref } from 'react'
+import { charLimitProps } from '@/lib/chars'
 import { cn } from '@/lib/cn'
 import { useFieldControl } from './Field'
 
@@ -25,11 +26,13 @@ export interface InputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 
   leadingIcon?: ReactNode
   /** Element inside the right edge (e.g. a unit or clear button). */
   trailing?: ReactNode
+  /** Longest value in characters, as the API counts them (an emoji is one, unlike the native attribute). */
+  maxLength?: number
   ref?: Ref<HTMLInputElement>
 }
 
 /** Text input (also for date/number/email/password). Inside a Field it is auto-labelled. */
-export function Input({ size = 'md', leadingIcon, trailing, className, ref, ...rest }: InputProps) {
+export function Input({ size = 'md', leadingIcon, trailing, className, ref, maxLength, onChange, ...rest }: InputProps) {
   const props = useFieldControl(rest)
   const input = (
     <input
@@ -42,6 +45,7 @@ export function Input({ size = 'md', leadingIcon, trailing, className, ref, ...r
         !leadingIcon && !trailing && className,
       )}
       {...props}
+      {...charLimitProps(maxLength, rest.value, onChange, rest)}
     />
   )
   if (!leadingIcon && !trailing) return input

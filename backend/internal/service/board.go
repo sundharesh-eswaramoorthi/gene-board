@@ -1,8 +1,11 @@
 package service
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"geneboard/internal/db"
 	"geneboard/internal/dto"
@@ -15,9 +18,10 @@ const KanbanDoneRetentionDays = 14
 // Board returns a project's board (SPEC §2 Boards). Scrum: every non-epic issue of the
 // active sprint (sprint null and no issues when none is active). Kanban: every non-epic
 // issue except those resolved more than KanbanDoneRetentionDays ago. Issues are in rank
-// order; clients group them into columns by status.
+// order; clients group them into columns by status. Parents holds the parents of listed
+// subtasks that are not listed themselves, for finding a subtask's epic.
 func (s *Service) Board(ctx context.Context, userID int64, projectKey string) (dto.Board, error) {
-	var out dto.Board
+	out := dto.Board{Issues: []dto.Issue{}, Parents: []dto.Issue{}}
 	err := s.inReadTx(ctx, func(q *db.Queries) error {
 		acc, err := s.projectByKey(ctx, q, userID, projectKey, RoleViewer)
 		if err != nil {
@@ -45,7 +49,6 @@ func (s *Service) Board(ctx context.Context, userID int64, projectKey string) (d
 			active, err := q.GetActiveSprint(ctx, p.ID)
 			switch {
 			case isNoRows(err):
-				out.Issues = []dto.Issue{}
 				return nil
 			case err != nil:
 				return fmt.Errorf("load active sprint: %w", err)
@@ -59,10 +62,36 @@ func (s *Service) Board(ctx context.Context, userID int64, projectKey string) (d
 				return fmt.Errorf("list sprint board issues: %w", err)
 			}
 		}
-		out.Issues, err = hydrateIssues(ctx, q, rows)
+		if out.Issues, err = hydrateIssues(ctx, q, rows); err != nil {
+			return err
+		}
+		out.Parents, err = unlistedParents(ctx, q, rows)
 		return err
 	})
 	return out, err
+}
+
+// unlistedParents returns the parents of the subtasks in rows that rows leave out, by id. A
+// Kanban board hides issues resolved long ago, which can be the parent of an open subtask;
+// clients look the parent up to find the subtask's epic. (A Scrum board lists them all:
+// subtasks share their parent's sprint.)
+func unlistedParents(ctx context.Context, q *db.Queries, rows []db.Issue) ([]dto.Issue, error) {
+	listed := make(map[int64]bool, len(rows))
+	for _, r := range rows {
+		listed[r.ID] = true
+	}
+	var ids []int64
+	for _, r := range rows {
+		if r.Type == dto.IssueTypeSubtask && r.ParentID != nil && !listed[*r.ParentID] {
+			ids = append(ids, *r.ParentID)
+		}
+	}
+	parents, err := issuesByID(ctx, q, ids)
+	if err != nil {
+		return nil, err
+	}
+	sorted := slices.SortedFunc(maps.Values(parents), func(a, b db.Issue) int { return cmp.Compare(a.ID, b.ID) })
+	return hydrateIssues(ctx, q, sorted)
 }
 
 // Backlog returns the backlog page (SPEC §5): the active and planned sprints (active

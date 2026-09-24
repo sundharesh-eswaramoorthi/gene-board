@@ -125,7 +125,7 @@ SELECT id, email, name, password_hash, created_at, updated_at, token_version FRO
 WHERE $1::text = ''
    OR name ILIKE '%' || $1::text || '%'
    OR email ILIKE '%' || $1::text || '%'
-ORDER BY lower(name), id
+ORDER BY lower(name) COLLATE "und-x-icu", id
 LIMIT $2::int
 `
 
@@ -135,7 +135,8 @@ type SearchUsersParams struct {
 }
 
 // SearchUsers matches name or e-mail case-insensitively. `pattern` must already have
-// LIKE wildcards escaped; an empty pattern returns the first users by name.
+// LIKE wildcards escaped; an empty pattern returns the first users by name (Unicode root
+// collation, see labels.sql).
 func (q *Queries) SearchUsers(ctx context.Context, arg SearchUsersParams) ([]User, error) {
 	rows, err := q.db.Query(ctx, searchUsers, arg.Pattern, arg.MaxResults)
 	if err != nil {

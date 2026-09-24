@@ -43,13 +43,17 @@ func (q *Queries) CreateIssueLink(ctx context.Context, arg CreateIssueLinkParams
 	return i, err
 }
 
-const deleteIssueLink = `-- name: DeleteIssueLink :exec
+const deleteIssueLink = `-- name: DeleteIssueLink :execrows
 DELETE FROM issue_links WHERE id = $1
 `
 
-func (q *Queries) DeleteIssueLink(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, deleteIssueLink, id)
-	return err
+// DeleteIssueLink returns the number of links deleted: 0 when a concurrent delete won.
+func (q *Queries) DeleteIssueLink(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteIssueLink, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const getIssueLink = `-- name: GetIssueLink :one

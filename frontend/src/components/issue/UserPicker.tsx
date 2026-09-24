@@ -18,6 +18,11 @@ export interface UserPickerProps extends PickerCommonProps {
   allowUnassigned?: boolean
   /** Text for the empty option / empty value (default "Unassigned"). */
   unassignedLabel?: string
+  /**
+   * Name of the field the picker sets ("Assignee", "Project lead"): the trigger is announced as
+   * "Assignee: Sam Patel" rather than by its value alone. Ignored when `aria-label` is given.
+   */
+  fieldLabel?: string
   /** Avatar size in the trigger (default `sm`; `compact` uses `md`). */
   avatarSize?: AvatarSize
 }
@@ -32,6 +37,7 @@ export function UserPicker({
   onChange,
   allowUnassigned = true,
   unassignedLabel = 'Unassigned',
+  fieldLabel,
   avatarSize,
   variant = 'field',
   disabled,
@@ -52,6 +58,7 @@ export function UserPicker({
     members.data?.find((m) => m.user.id === valueId)?.user ?? (typeof value === 'object' ? value : null)
 
   const emptyText = placeholder ?? unassignedLabel
+  const valueText = current ? current.name : emptyText
   const triggerEl = trigger ?? (
     <PickerTrigger
       variant={variant}
@@ -59,7 +66,7 @@ export function UserPicker({
       className={className}
       id={id}
       data-testid={testId}
-      aria-label={ariaLabel ?? `${current ? current.name : emptyText}`}
+      aria-label={ariaLabel ?? (fieldLabel ? `${fieldLabel}: ${valueText}` : valueText)}
     >
       {variant === 'compact' ? (
         <UserAvatar user={current} size={avatarSize ?? 'md'} tooltip={false} emptyLabel={emptyText} />

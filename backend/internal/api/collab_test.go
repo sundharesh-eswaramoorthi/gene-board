@@ -37,6 +37,10 @@ func TestComments(t *testing.T) {
 	if len(list) != 2 || list[0].ID != c1.ID || list[1].ID != c2.ID {
 		t.Fatalf("list (oldest first): %+v", list)
 	}
+	act := activitiesFor(e.issueActivity(admin, issue.Key), "comment.created", "")
+	if len(act) != 2 || len([]rune(deref(act[1].NewValue))) != 200 || deref(act[0].NewValue) != "Second" {
+		t.Fatalf("comment.created activity: %+v", act)
+	}
 
 	// Author-only edit.
 	c1Path := "/api/comments/" + itoa(c1.ID)
@@ -56,9 +60,10 @@ func TestComments(t *testing.T) {
 	expectStatus(t, e.do(http.MethodDelete, "/api/comments/"+itoa(c2.ID), admin.Token, nil), http.StatusNoContent)
 	expectError(t, e.do(http.MethodDelete, c1Path, alice.Token, nil), http.StatusNotFound, "not_found")
 
-	act := activitiesFor(e.issueActivity(admin, issue.Key), "comment.created", "")
-	if len(act) != 2 || len([]rune(deref(act[1].NewValue))) != 200 || deref(act[0].NewValue) != "Second" {
-		t.Fatalf("comment.created activity: %+v", act)
+	// The history keeps that comments were made, but not the text of deleted ones.
+	act = activitiesFor(e.issueActivity(admin, issue.Key), "comment.created", "")
+	if len(act) != 2 || act[0].NewValue != nil || act[1].NewValue != nil {
+		t.Fatalf("comment.created activity after the deletes: %+v", act)
 	}
 }
 

@@ -160,8 +160,12 @@ export function useBacklogDnd({ visible, onDrop, describeSection }: Options) {
         // Entering the section above: aim just below its last row so the issue lands at its end.
         return sectionOf(closestId) == null ? { x: rect.left, y: rect.top + rect.height } : { x: rect.left, y: rect.top }
       }
-      // Entering the section below: the row leaves its current (expanded) section, shifting
-      // everything underneath up by one row — aim where the target will be after that shift.
+      // Entering an empty or collapsed section below: aim just inside its top edge. (Aiming a
+      // row higher, as for rows below, would land above the section, back in the one the row
+      // is leaving.)
+      if (sectionOf(closestId) != null) return { x: rect.left, y: rect.top + 1 }
+      // Entering the section below at a row: the row leaves its current (expanded) section,
+      // shifting everything underneath up by one row — aim where the target will be after that shift.
       const fromData = from != null ? droppableContainers.get(sectionDroppableId(from))?.data.current : undefined
       const leavesGap = !(fromData as SectionDroppableData | undefined)?.keyboardTarget
       return { x: rect.left, y: rect.top - (leavesGap ? collisionRect.height : 0) }
@@ -234,9 +238,12 @@ export function useBacklogDnd({ visible, onDrop, describeSection }: Options) {
       if (!current) return current
       const key = String(dragged.id)
       const from = findContainer(current, key)
-      const to = findContainer(current, over.id)
+      // A section is looked up among the current ones, not the lists taken at pickup: a sprint
+      // created during the drag (by a teammate) is a drop target too, and starts out empty.
+      const section = sectionOf(over.id)
+      const to = section != null ? (section in visible ? section : undefined) : findContainer(current, over.id)
       if (!from || !to || from === to) return current
-      const target = current[to]
+      const target = current[to] ?? []
       let index = target.length
       if (sectionOf(over.id) == null) {
         const overIndex = target.indexOf(String(over.id))

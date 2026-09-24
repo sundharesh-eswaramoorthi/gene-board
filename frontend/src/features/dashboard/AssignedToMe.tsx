@@ -64,7 +64,7 @@ export function AssignedToMe() {
       <div className="rounded-lg border border-border bg-surface">
         {assigned.isPending ? (
           <AssignedSkeleton />
-        ) : assigned.isError ? (
+        ) : assigned.isLoadingError ? (
           <ErrorState size="sm" error={assigned.error} title="Couldn’t load your issues" onRetry={() => void assigned.refetch()} />
         ) : issues.length === 0 ? (
           <EmptyState

@@ -15,7 +15,8 @@ import (
 )
 
 // CreateIssueInput is the body of POST /projects/{key}/issues.
-// reporterId: absent = the caller, null = no reporter.
+// reporterId: absent = the caller, null = no reporter. sprintId: absent or null = no sprint;
+// a subtask takes its parent's sprint, and a sprintId sent for it (null too) must match.
 type CreateIssueInput struct {
 	Type        string                `json:"type"`
 	Summary     string                `json:"summary"`
@@ -25,7 +26,7 @@ type CreateIssueInput struct {
 	AssigneeID  *int64                `json:"assigneeId"`
 	ReporterID  httpx.Optional[int64] `json:"reporterId,omitzero"`
 	ParentID    *int64                `json:"parentId"`
-	SprintID    *int64                `json:"sprintId"`
+	SprintID    httpx.Optional[int64] `json:"sprintId,omitzero"`
 	StoryPoints *float64              `json:"storyPoints"`
 	DueDate     *dto.Date             `json:"dueDate"`
 	LabelIDs    []int64               `json:"labelIds"`
@@ -93,13 +94,13 @@ func (s *Service) CreateIssue(ctx context.Context, userID int64, projectKey stri
 		if err != nil {
 			return err
 		}
-		p := acc.project
 		// Lock order: project row, then issues, then sprints (see lockSprint). Taking the
 		// project lock first keeps resolveSprint's share lock from deadlocking with sprint
 		// completion / deletion.
-		if err := t.q.LockProject(ctx, p.ID); err != nil {
-			return fmt.Errorf("lock project: %w", err)
+		if acc, err = s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleMember); err != nil {
+			return err
 		}
+		p := acc.project
 
 		var status db.Status
 		if in.StatusID != nil {
@@ -131,20 +132,21 @@ func (s *Service) CreateIssue(ctx context.Context, userID int64, projectKey stri
 		var sprintID *int64
 		switch {
 		case issueType == dto.IssueTypeEpic:
-			if in.SprintID != nil {
+			if in.SprintID.HasValue() {
 				return httpx.Validation("sprintId", "must be empty for epics")
 			}
 		case issueType == dto.IssueTypeSubtask:
-			// Subtasks inherit the parent's sprint; a conflicting explicit value is rejected.
-			if in.SprintID != nil && !equalPtr(in.SprintID, parent.SprintID) {
+			// Subtasks inherit the parent's sprint; a conflicting explicit value (null for a
+			// parent in a sprint, too) is rejected, as on PATCH and move.
+			if in.SprintID.Set && !equalPtr(in.SprintID.Ptr(), parent.SprintID) {
 				return httpx.Validation("sprintId", msgSubtaskSprint)
 			}
 			sprintID = parent.SprintID
-		case in.SprintID != nil:
-			if _, err := resolveSprint(ctx, t.q, p.ID, *in.SprintID); err != nil {
+		case in.SprintID.HasValue():
+			if _, err := resolveSprint(ctx, t.q, p, in.SprintID.Value); err != nil {
 				return err
 			}
-			sprintID = in.SprintID
+			sprintID = in.SprintID.Ptr()
 		}
 		labels, err := resolveLabels(ctx, t.q, p.ID, in.LabelIDs)
 		if err != nil {
@@ -218,8 +220,9 @@ func (s *Service) UpdateIssue(ctx context.Context, userID int64, issueKey string
 		// (see sprints.go): the project row first, then the issue, then the rows it refers
 		// to. Without it a status or parent change could deadlock with, or slip past, a
 		// sprint being completed.
-		if err := t.q.LockProject(ctx, acc.project.ID); err != nil {
-			return fmt.Errorf("lock project: %w", err)
+		p, err := s.lockIssueProject(ctx, t, userID, acc)
+		if err != nil {
+			return err
 		}
 		cur, err := lockIssue(ctx, t.q, acc.issue.ID)
 		if err != nil {
@@ -326,7 +329,7 @@ func (s *Service) UpdateIssue(ctx context.Context, userID int64, issueKey string
 			next.SprintID = parentSprintID // follows a new parent
 		case in.SprintID.Set && !equalPtr(in.SprintID.Ptr(), cur.SprintID):
 			if in.SprintID.HasValue() {
-				if _, err := resolveSprint(ctx, t.q, pid, in.SprintID.Value); err != nil {
+				if _, err := resolveSprint(ctx, t.q, p, in.SprintID.Value); err != nil {
 					return err
 				}
 			}
@@ -439,10 +442,11 @@ func (s *Service) MoveIssue(ctx context.Context, userID int64, issueKey string, 
 		if acc.issue.Type == dto.IssueTypeEpic {
 			return invalid("Epics cannot be moved on boards or backlogs")
 		}
-		pid := acc.project.ID
-		if err := t.q.LockProject(ctx, pid); err != nil { // serialises rank computations
-			return fmt.Errorf("lock project: %w", err)
+		p, err := s.lockIssueProject(ctx, t, userID, acc) // serialises rank computations
+		if err != nil {
+			return err
 		}
+		pid := p.ID
 		cur, err := lockIssue(ctx, t.q, acc.issue.ID)
 		if err != nil {
 			return err
@@ -468,7 +472,7 @@ func (s *Service) MoveIssue(ctx context.Context, userID int64, issueKey string, 
 				}
 			} else if !equalPtr(requested, cur.SprintID) {
 				if requested != nil {
-					if _, err := resolveSprint(ctx, t.q, pid, *requested); err != nil {
+					if _, err := resolveSprint(ctx, t.q, p, *requested); err != nil {
 						return err
 					}
 				}
@@ -498,7 +502,7 @@ func (s *Service) MoveIssue(ctx context.Context, userID int64, issueKey string, 
 				return fmt.Errorf("set rank: %w", err)
 			}
 		}
-		t.publish(pid, realtime.IssueMoved, acc.project.Key, cur.Key, userID)
+		t.publish(pid, realtime.IssueMoved, p.Key, cur.Key, userID)
 		out, err = hydrateIssue(ctx, t.q, updated)
 		return err
 	})
@@ -506,7 +510,8 @@ func (s *Service) MoveIssue(ctx context.Context, userID int64, issueKey string, 
 }
 
 // DeleteIssue deletes an issue and its subtasks; other children (issues of a deleted epic)
-// become parentless. Every deleted issue gets an issue.deleted activity row.
+// become parentless. Every deleted issue gets an issue.deleted activity row. Their links go
+// with them, so the projects of linked issues elsewhere are notified too.
 func (s *Service) DeleteIssue(ctx context.Context, userID int64, issueKey string) error {
 	return s.inTx(ctx, func(t *txn) error {
 		acc, err := s.issueByKey(ctx, t.q, userID, issueKey, RoleMember)
@@ -515,8 +520,9 @@ func (s *Service) DeleteIssue(ctx context.Context, userID int64, issueKey string
 		}
 		// Project lock first (see UpdateIssue): deleting also rewrites children and
 		// subtasks, which sprint and status changes lock too.
-		if err := t.q.LockProject(ctx, acc.project.ID); err != nil {
-			return fmt.Errorf("lock project: %w", err)
+		p, err := s.lockIssueProject(ctx, t, userID, acc)
+		if err != nil {
+			return err
 		}
 		issue, err := lockIssue(ctx, t.q, acc.issue.ID)
 		if err != nil {
@@ -526,13 +532,22 @@ func (s *Service) DeleteIssue(ctx context.Context, userID int64, issueKey string
 		if err != nil {
 			return fmt.Errorf("list subtasks: %w", err)
 		}
+		victims := append(subtasks, issue)
+		victimIDs := make([]int64, len(victims))
+		for i, v := range victims {
+			victimIDs[i] = v.ID
+		}
+		unlinked, err := t.q.ListCrossProjectLinkedIssues(ctx, db.ListCrossProjectLinkedIssuesParams{ProjectID: p.ID, IssueIds: victimIDs})
+		if err != nil {
+			return fmt.Errorf("list cross-project links: %w", err)
+		}
 		if err := t.q.LogUnparentChildren(ctx, db.LogUnparentChildrenParams{ActorID: userID, ParentKey: issue.Key, ParentID: issue.ID}); err != nil {
 			return fmt.Errorf("log unparented children: %w", err)
 		}
 		if err := t.q.UnparentChildren(ctx, issue.ID); err != nil {
 			return fmt.Errorf("unparent children: %w", err)
 		}
-		for _, victim := range append(subtasks, issue) {
+		for _, victim := range victims {
 			if err := t.q.DeleteIssue(ctx, victim.ID); err != nil {
 				return fmt.Errorf("delete issue %s: %w", victim.Key, err)
 			}
@@ -546,9 +561,32 @@ func (s *Service) DeleteIssue(ctx context.Context, userID int64, issueKey string
 				return err
 			}
 		}
-		t.publish(issue.ProjectID, realtime.IssueDeleted, acc.project.Key, issue.Key, userID)
+		t.publish(issue.ProjectID, realtime.IssueDeleted, p.Key, issue.Key, userID)
+		publishUnlinked(t, unlinked, userID)
 		return nil
 	})
+}
+
+// publishUnlinked notifies the projects of issues whose links to deleted issues were removed
+// by ON DELETE CASCADE, as publishLinkChange does when a link is deleted explicitly.
+func publishUnlinked(t *txn, issues []db.Issue, actorID int64) {
+	for _, is := range issues {
+		t.publish(is.ProjectID, realtime.IssueUpdated, projectKeyOf(is.Key), is.Key, actorID)
+	}
+}
+
+// lockIssueProject is lockProjectAs for a write of an issue of acc's project: it returns
+// the project re-read under the lock, and reports the issue as not found (as issueByKey
+// does) when the caller is no longer a member or the project is gone.
+func (s *Service) lockIssueProject(ctx context.Context, t *txn, userID int64, acc issueAccess) (db.Project, error) {
+	pacc, err := s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleMember)
+	if httpx.IsCode(err, httpx.CodeNotFound) {
+		return db.Project{}, errIssueNotFound
+	}
+	if err != nil {
+		return db.Project{}, err
+	}
+	return pacc.project, nil
 }
 
 // keyShareIssue re-reads an issue with the lock a foreign-key check takes, for writes that

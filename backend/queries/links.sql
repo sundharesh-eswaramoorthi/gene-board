@@ -8,7 +8,8 @@ RETURNING *;
 -- name: GetIssueLink :one
 SELECT * FROM issue_links WHERE id = $1;
 
--- name: DeleteIssueLink :exec
+-- DeleteIssueLink returns the number of links deleted: 0 when a concurrent delete won.
+-- name: DeleteIssueLink :execrows
 DELETE FROM issue_links WHERE id = $1;
 
 -- name: ListIssueLinks :many

@@ -176,8 +176,14 @@ func NewRouter(d Deps) http.Handler {
 	return r
 }
 
-// isProjectWebsocket matches GET /api/projects/{key}/ws, the one long-lived route.
+// isProjectWebsocket matches websocket handshakes for GET /api/projects/{key}/ws, the one
+// long-lived route (exempt from httpx.Deadlines). Only a bodiless GET asking for the upgrade
+// qualifies: any other request to that path could withhold a body with no deadline at all.
 func isProjectWebsocket(r *http.Request) bool {
+	if r.Method != http.MethodGet || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") ||
+		r.ContentLength != 0 || len(r.TransferEncoding) > 0 {
+		return false
+	}
 	rest, ok := strings.CutPrefix(r.URL.Path, "/api/projects/")
 	key, tail, found := strings.Cut(rest, "/")
 	return ok && found && key != "" && tail == "ws"

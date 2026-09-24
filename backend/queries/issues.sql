@@ -104,6 +104,22 @@ UPDATE issues SET rank = $2 WHERE id = $1 RETURNING *;
 -- name: DeleteIssue :exec
 DELETE FROM issues WHERE id = $1;
 
+-- ListCrossProjectLinkedIssues returns the issues of other projects that are linked (in
+-- either direction) to issues of project_id: to the issues in issue_ids, or to any issue of
+-- the project when issue_ids is null. Deleting those issues (or the project) removes the
+-- links by cascade, so the other projects' subscribers must be told.
+-- name: ListCrossProjectLinkedIssues :many
+SELECT o.* FROM issues o
+WHERE o.project_id <> @project_id::bigint
+  AND o.id IN (
+    SELECT CASE WHEN l.source_id = i.id THEN l.target_id ELSE l.source_id END
+    FROM issues i
+    JOIN issue_links l ON i.id IN (l.source_id, l.target_id)
+    WHERE i.project_id = @project_id::bigint
+      AND (sqlc.narg(issue_ids)::bigint[] IS NULL OR i.id = ANY(sqlc.narg(issue_ids)::bigint[]))
+  )
+ORDER BY o.id;
+
 -- LogUnparentChildren records the parent change of every non-subtask child of
 -- `parent_id`; run it before UnparentChildren.
 -- name: LogUnparentChildren :exec

@@ -540,6 +540,11 @@ export interface BoardResponse {
   sprint: Sprint | null
   /** ordered by rank */
   issues: Issue[]
+  /**
+   * parents of subtasks in `issues` that are not on the board themselves (Kanban hides issues
+   * resolved long ago), for finding a subtask's epic; never shown as cards
+   */
+  parents: Issue[]
 }
 
 /** A sprint section of the backlog. */

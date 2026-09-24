@@ -74,7 +74,7 @@ export function DashboardPage() {
 
       {projects.isPending ? (
         <RecentProjectsSkeleton />
-      ) : projects.isError ? (
+      ) : projects.isLoadingError ? (
         <div className="rounded-lg border border-border">
           <ErrorState error={projects.error} title="Couldn’t load your projects" onRetry={() => void projects.refetch()} />
         </div>

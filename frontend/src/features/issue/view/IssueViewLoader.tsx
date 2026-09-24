@@ -20,7 +20,7 @@ export interface IssueViewLoaderProps {
   onClose?: () => void
   /** Modal only: renders the (visually hidden) dialog title for the current state. */
   renderTitle?: (title: string) => ReactNode
-  /** Modal only: where editors report unsaved drafts. */
+  /** Where editors report unsaved drafts (the modal / page asks before leaving). */
   unsavedEdits?: UnsavedEdits
 }
 

@@ -34,13 +34,15 @@ FROM projects p
 JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = @user_id
 LEFT JOIN users u ON u.id = p.lead_id
 WHERE (sqlc.narg(project_id)::bigint IS NULL OR p.id = sqlc.narg(project_id)::bigint)
-ORDER BY lower(p.name), p.id;
+ORDER BY lower(p.name) COLLATE "und-x-icu", p.id;
 
 -- LockProject takes a row lock on the project; used to serialise rank computations,
 -- admin-count checks and sprint lifecycle changes inside a transaction. FOR NO KEY UPDATE
 -- (like the implicit lock of NextIssueNumber) still lets other transactions insert rows
 -- that reference the project: a plain FOR UPDATE would also block their foreign-key checks
 -- and deadlock with writers that hold an issue lock while logging activity.
+-- Call it through the service's lockProjectAs, which re-reads the project and the caller's
+-- role once the lock is held (a project deleted meanwhile locks no row here).
 -- name: LockProject :exec
 SELECT id FROM projects WHERE id = $1 FOR NO KEY UPDATE;
 

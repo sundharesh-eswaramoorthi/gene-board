@@ -7,6 +7,9 @@ import (
 	"slices"
 	"strings"
 
+	"golang.org/x/text/collate"
+	"golang.org/x/text/language"
+
 	"geneboard/internal/db"
 	"geneboard/internal/dto"
 )
@@ -272,11 +275,13 @@ func subtaskCountsByParent(ctx context.Context, q *db.Queries, ids []int64) (map
 	return out, nil
 }
 
-// sortedLabelNames returns label names sorted case-insensitively, as shown in the UI.
+// sortedLabelNames returns label names sorted case-insensitively in the Unicode root
+// collation, like the label queries ("und-x-icu") and the UI: "Ärger" sorts before "Zeta".
 func sortedLabelNames(labels []db.Label) []string {
 	sorted := slices.Clone(labels)
+	col := collate.New(language.Und) // not safe for concurrent use: one per call
 	slices.SortFunc(sorted, func(a, b db.Label) int {
-		if c := strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)); c != 0 {
+		if c := col.CompareString(strings.ToLower(a.Name), strings.ToLower(b.Name)); c != 0 {
 			return c
 		}
 		return cmp.Compare(a.ID, b.ID)

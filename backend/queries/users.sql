@@ -37,11 +37,12 @@ SELECT token_version FROM users WHERE id = $1;
 SELECT * FROM users WHERE id = ANY(@ids::bigint[]);
 
 -- SearchUsers matches name or e-mail case-insensitively. `pattern` must already have
--- LIKE wildcards escaped; an empty pattern returns the first users by name.
+-- LIKE wildcards escaped; an empty pattern returns the first users by name (Unicode root
+-- collation, see labels.sql).
 -- name: SearchUsers :many
 SELECT * FROM users
 WHERE @pattern::text = ''
    OR name ILIKE '%' || @pattern::text || '%'
    OR email ILIKE '%' || @pattern::text || '%'
-ORDER BY lower(name), id
+ORDER BY lower(name) COLLATE "und-x-icu", id
 LIMIT @max_results::int;

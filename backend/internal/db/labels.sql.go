@@ -88,7 +88,7 @@ SELECT il.issue_id, l.id, l.project_id, l.name, l.color, l.created_at
 FROM issue_labels il
 JOIN labels l ON l.id = il.label_id
 WHERE il.issue_id = ANY($1::bigint[])
-ORDER BY il.issue_id, lower(l.name), l.id
+ORDER BY il.issue_id, lower(l.name) COLLATE "und-x-icu", l.id
 `
 
 type ListIssueLabelsRow struct {
@@ -125,10 +125,12 @@ func (q *Queries) ListIssueLabels(ctx context.Context, issueIds []int64) ([]List
 
 const listLabels = `-- name: ListLabels :many
 
-SELECT id, project_id, name, color, created_at FROM labels WHERE project_id = $1 ORDER BY lower(name), id
+SELECT id, project_id, name, color, created_at FROM labels WHERE project_id = $1 ORDER BY lower(name) COLLATE "und-x-icu", id
 `
 
-// Labels and issue <-> label assignments. Labels are always ordered case-insensitively by name.
+// Labels and issue <-> label assignments. Labels are always ordered by name, case-insensitively
+// and in the Unicode root collation ("und-x-icu", so accented letters sort with their base
+// letter whatever the database's default collation is).
 func (q *Queries) ListLabels(ctx context.Context, projectID int64) ([]Label, error) {
 	rows, err := q.db.Query(ctx, listLabels, projectID)
 	if err != nil {
@@ -155,8 +157,28 @@ func (q *Queries) ListLabels(ctx context.Context, projectID int64) ([]Label, err
 	return items, nil
 }
 
+const lockLabel = `-- name: LockLabel :one
+SELECT id, project_id, name, color, created_at FROM labels WHERE id = $1 FOR NO KEY UPDATE
+`
+
+// LockLabel locks a label that is about to be renamed or recoloured, so concurrent edits
+// apply one after the other and each keeps the other's change. FOR NO KEY UPDATE does not
+// block issue writes assigning the label (LockLabelsByIDs).
+func (q *Queries) LockLabel(ctx context.Context, id int64) (Label, error) {
+	row := q.db.QueryRow(ctx, lockLabel, id)
+	var i Label
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.Name,
+		&i.Color,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const lockLabelsByIDs = `-- name: LockLabelsByIDs :many
-SELECT id, project_id, name, color, created_at FROM labels WHERE id = ANY($1::bigint[]) ORDER BY lower(name), id FOR KEY SHARE
+SELECT id, project_id, name, color, created_at FROM labels WHERE id = ANY($1::bigint[]) ORDER BY lower(name) COLLATE "und-x-icu", id FOR KEY SHARE
 `
 
 // LockLabelsByIDs loads labels with the lock a foreign-key check takes: issue writes

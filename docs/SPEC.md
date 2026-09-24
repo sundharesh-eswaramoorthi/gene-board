@@ -8,7 +8,9 @@ This document is the **contract** between the Go backend and the React frontend.
 this document disagree, the code is wrong. The database schema is
 `backend/internal/database/migrations/00001_init.sql` (authoritative; do not edit it — add a new
 migration if a change is truly required). `00002_token_version.sql` adds `users.token_version`
-(access-token revocation, §3 Auth).
+(access-token revocation, §3 Auth). `00003_relates_pairs_and_comment_activity.sql` adds a unique
+index on the unordered pair of `relates` links and `activities.comment_id` (§2 Activity log).
+`00004_nfc_emails.sql` brings stored e-mail addresses to Unicode NFC (§3 API conventions).
 
 ---
 
@@ -98,11 +100,11 @@ Issue key = `<PROJECT KEY>-<n>`; `n` comes from `projects.issue_counter` increme
 One global rank per issue within a project (like Jira's rank). All lists — backlog, sprint lists, board columns — are ordered by `rank ASC` (byte-wise; column has `COLLATE "C"`).
 - `internal/rank` implements fractional indexing over the alphabet `0-9a-z` (byte order): `rank.Between(prev, next string) (string, error)` where `""` means unbounded. Must satisfy `prev < result < next` for all valid inputs, never produce a key ending in `'0'`, and be thoroughly unit-tested (including thousands of random insertions and repeated insertion at the same spot).
 - New issues are ranked last in the project (`Between(maxRank, "")`).
-- Moves (drag & drop) send the ids of the issues that will be immediately above (`prevIssueId`) and below (`nextIssueId`) the moved issue in the destination list; server computes `Between(prev.rank, next.rank)`. If only one neighbour is given, the other side is unbounded. If `prev.rank >= next.rank` (stale client), fall back to `Between(prev.rank, "")`.
+- Moves (drag & drop) send the ids of the issues that will be immediately above (`prevIssueId`) and below (`nextIssueId`) the moved issue in the destination list; server computes `Between(prev.rank, next.rank)`. If only one neighbour is given, the other side is unbounded. If `prev.rank >= next.rank` (stale client), fall back to `Between(prev.rank, "")`. A neighbour id that is not an issue of this project (deleted since the client loaded its list, or of another project, so the response does not reveal whether an id exists) counts as not given; if neither remains, the rank is unchanged. The moved issue itself as a neighbour → 400.
 
 ### Sprints (Scrum projects)
 States: `planned` → `active` → `completed`.
-- Create: state `planned`; default name `"<KEY> Sprint <n>"` where n = (number of sprints ever created in project) + 1.
+- Create: state `planned`; a missing name, or one with no visible character, gets the default name `"<KEY> Sprint <n>"` where n = (number of sprints ever created in project) + 1.
 - Start: only `planned`; requires `startDate` and `endDate` (end ≥ start); only one `active` sprint per project (409 otherwise).
 - Complete: only `active`. Issues in the sprint whose status category ≠ `done` ("open" issues) are moved to the target (`backlog`, an existing `planned` sprint of the same project, or a `new` sprint that gets created). Done issues remain in the completed sprint (and are not listed in the backlog; open issues later left in a completed sprint, e.g. reopened, are listed in the backlog). Subtasks follow their parent (rule above). Sets `state=completed`, `completed_at=now()`.
 - Delete: only `planned` sprints (409 otherwise); their issues go to the backlog.
@@ -113,6 +115,7 @@ States: `planned` → `active` → `completed`.
 - **Scrum** project board = non-epic issues (standard + subtasks) in the **active** sprint. If no active sprint, `sprint: null, issues: []`.
 - **Kanban** project board = all non-epic issues, excluding done-category issues whose `resolvedAt` is older than 14 days.
 - Columns = statuses ordered by position; issues are grouped client-side by `status.id`, ordered by rank.
+- `parents` = the parents of subtasks on the board that are not on it themselves (a Kanban board can hide a long-resolved parent), so clients can still find a subtask's epic; they are never shown as cards.
 
 ### Activity log (`activities`)
 Written in the same transaction as the change. `action` values:
@@ -122,8 +125,8 @@ Written in the same transaction as the change. `action` values:
 | `issue.created` | yes | new_value = summary |
 | `issue.updated` | yes | one row **per changed field**; field ∈ `summary, description, type, status, priority, assignee, reporter, parent, sprint, storyPoints, dueDate, labels`; old/new are human-readable (status name, user name, issue key, sprint name, comma-joined label names, `YYYY-MM-DD`); for `description` old/new are null |
 | `issue.deleted` | null (issue_key kept) | new_value = summary |
-| `comment.created` | yes | new_value = first 200 chars of body |
-| `link.created` / `link.deleted` | yes (source issue) | new_value e.g. `blocks GB-7` |
+| `comment.created` | yes (+ comment_id) | new_value = first 200 chars of the comment's **current** body, read when listed (not stored); null once the comment or its issue is deleted |
+| `link.created` / `link.deleted` | yes (source issue) | new_value e.g. `blocks GB-7`; readers who are not members of the other issue's project get `blocks an issue in another project` |
 | `sprint.created` / `sprint.started` / `sprint.completed` | null | new_value = sprint name |
 | `project.created` | null | new_value = project name |
 | `member.added` / `member.removed` | null | new_value = user name (+ ` (role)` for added) |
@@ -131,7 +134,7 @@ Written in the same transaction as the change. `action` values:
 Rank-only moves are not logged. Status/sprint changes via the move endpoint are logged as `issue.updated`.
 
 ### Realtime
-After any successful mutation inside a project, the server publishes an event to the project's websocket subscribers (after the DB transaction commits). Clients treat events as cache-invalidation hints.
+After any successful mutation inside a project, the server publishes an event to the project's websocket subscribers (after the DB transaction commits). Clients treat events as cache-invalidation hints. A link change also concerns the other issue's project: creating or deleting a link, and deleting an issue (with its subtasks) or a project, which removes its links, publish `issue.updated` for each linked issue of another project to that project.
 
 ---
 
@@ -142,8 +145,9 @@ After any successful mutation inside a project, the server publishes an event to
 - JSON field names are **camelCase**. Ids are JSON numbers. Timestamps are RFC 3339 strings in UTC (e.g. `2026-09-24T10:15:00Z`). Dates are `YYYY-MM-DD` strings. Absent optional values are `null` (never omitted) in responses.
 - **PATCH semantics**: a field absent from the body is left unchanged; a field explicitly `null` clears it (only for nullable fields). Implement with a generic `httpx.Optional[T]` (tracks `Set` and `Null`).
 - Unknown JSON fields are ignored. Malformed JSON → 400 `bad_request`.
-- Validation: trim strings before validating. Text containing NUL characters (`\u0000`) is rejected: 400 `validation_error` on the field in bodies, 400 `bad_request` in query strings and paths (which must also be valid UTF-8).
-- Every request other than the websocket must send its body within 30 s and read its response within 60 s.
+- Lists "ordered by name" (and issue search by `summary`) compare case-insensitively in the Unicode root collation (Postgres `"und-x-icu"`), so accented letters sort with their base letter ("Ärger" before "Zeta"), as in the UI.
+- Validation: trim strings before validating. Names (of users, projects, sprints, columns and labels) are also brought to Unicode NFC and lose the invisible characters around them (zero-width spaces, BOMs, bidi controls), so they compare as they look; e-mail addresses are brought to NFC and must not contain invisible characters. Required text must contain a visible character (400 "is required" otherwise). Text containing NUL characters (`\u0000`) is rejected: 400 `validation_error` on the field in bodies, 400 `bad_request` in query strings and paths (which must also be valid UTF-8). A malformed query string (a bad `%` escape, a `;` separator) is 400 `bad_request` as well, never read without the broken parameter.
+- Every request other than a websocket handshake (a GET with `Upgrade: websocket` and no body) must send its body within 30 s and read its response within 60 s.
 
 ### Error envelope
 ```json
@@ -340,7 +344,7 @@ Invalid values → 400 `bad_request`.
   assigneeId?: ID | null;                           // must be a project member
   reporterId?: ID | null;                           // default: caller; must be a member
   parentId?: ID | null;                             // hierarchy rules; subtask requires it
-  sprintId?: ID | null;                             // planned/active sprint of same project; forbidden for epics; ignored-must-match for subtasks (inherits parent)
+  sprintId?: ID | null;                             // planned/active sprint of same project; forbidden for epics; subtasks inherit the parent's (a value sent, null included, must match it)
   storyPoints?: number | null; dueDate?: string | null;
   labelIds?: ID[];                                  // labels of the same project
 }
@@ -356,8 +360,8 @@ Move semantics: see §2 Rank. Changing `sprintId` via move on a standard issue a
 | DELETE | `/comments/{id}` (author or project admin) | – | 204 |
 
 ### Links
-| POST | `/issues/{issueKey}/links` | `{ type, targetKey }` (target must be accessible to caller; not the same issue; duplicate → 409) | 201 `IssueLink` (from the perspective of `{issueKey}`: direction `outward`) |
-| DELETE | `/issue-links/{id}` (member of source issue's project) | – | 204 |
+| POST | `/issues/{issueKey}/links` | `{ type, targetKey }` (target must be accessible to caller; not the same issue; duplicate → 409, and for the symmetric `relates` the reverse link is a duplicate too — also when both are created at once) | 201 `IssueLink` (from the perspective of `{issueKey}`: direction `outward`) |
+| DELETE | `/issue-links/{id}` (member of source issue's project) | – | 204 (404 if already deleted, also by a concurrent request; only one `link.deleted` is logged) |
 
 ### Activity
 | GET | `/issues/{issueKey}/activity` | – | `Activity[]` newest first |
@@ -373,10 +377,10 @@ Move semantics: see §2 Rank. Changing `sprintId` via move on a standard issue a
 | POST | `/sprints/{id}/start` | `{ startDate, endDate, name?, goal? }` | `Sprint` |
 | POST | `/sprints/{id}/complete` | `{ target: 'backlog' \| 'sprint' \| 'new', sprintId?: ID }` | `{ sprint: Sprint, completedIssueCount: number, movedIssueCount: number, targetSprint: Sprint \| null }` |
 
-Kanban projects: sprint endpoints return 400 `validation_error` ("Kanban projects do not use sprints") for create/start.
+Kanban projects: sprint endpoints return 400 `validation_error` ("Kanban projects do not use sprints") for create/start (also `complete` with target `new`). Their issues cannot be put into a sprint either: create / PATCH / move with a `sprintId` other than `null` and the issue's current sprint → 400 on `sprintId`; issues still in a sprint left over from Scrum can leave it (`null`), and subtasks keep sharing their parent's sprint.
 
 ### Board, backlog, epics
-| GET | `/projects/{key}/board` | – | `{ project: Project, statuses: Status[], sprint: Sprint \| null, issues: Issue[] }` (§2 Boards; issues by rank) |
+| GET | `/projects/{key}/board` | – | `{ project: Project, statuses: Status[], sprint: Sprint \| null, issues: Issue[], parents: Issue[] }` (§2 Boards; issues by rank; parents by id) |
 | GET | `/projects/{key}/backlog` | – | `{ sprints: { sprint: Sprint, issues: Issue[] }[], backlog: Issue[] }` — sprints = active + planned (active first, planned by id); backlog = standard issues not in an active/planned sprint: those without a sprint (any status) and open issues left in completed sprints; done issues of completed sprints are excluded; issues exclude epics and subtasks; all by rank |
 | GET | `/projects/{key}/epics` | – | `EpicProgress[]` ordered by epic rank |
 
@@ -391,4 +395,4 @@ Server sends a ping every 30s; clients reconnect with backoff. Origin check must
 ---
 
 ## 6. Seed data (`go run ./cmd/server seed`)
-Idempotent-ish (skips if user `demo@geneboard.dev` exists). Creates users `demo@geneboard.dev` / `alex@geneboard.dev` / `sam@geneboard.dev` (password `password123`), a Scrum project `GB` "Gene Board" (all three members; demo admin) with 3 epics, ~15 stories/tasks/bugs spread over an active sprint, a planned sprint and the backlog, a few subtasks, labels, comments and a link; and a Kanban project `OPS` "Operations" with ~8 issues across columns.
+Idempotent-ish (skips if user `demo@geneboard.dev` exists; `seed --if-empty`, which `make up` runs, skips any database that has users). Creates users `demo@geneboard.dev` / `alex@geneboard.dev` / `sam@geneboard.dev` (password `password123`), a Scrum project `GB` "Gene Board" (all three members; demo admin) with 3 epics, ~15 stories/tasks/bugs spread over an active sprint, a planned sprint and the backlog, a few subtasks, labels, comments and a link; and a Kanban project `OPS` "Operations" with ~8 issues across columns.

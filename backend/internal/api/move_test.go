@@ -71,9 +71,10 @@ func TestMoveReordersByRank(t *testing.T) {
 	}
 	expect("GB-2", "GB-3", "GB-4", "GB-1", "GB-5")
 
-	// Neighbour validation.
+	// Neighbour validation (a neighbour that is not an issue of this project is ignored
+	// instead: see TestMoveIgnoresDeletedNeighbours).
 	expectFieldError(t, e.do(http.MethodPost, "/api/issues/GB-1/move", u.Token, map[string]any{"prevIssueId": ids["GB-1"]}), "prevIssueId")
-	expectFieldError(t, e.do(http.MethodPost, "/api/issues/GB-1/move", u.Token, map[string]any{"nextIssueId": 999999}), "nextIssueId")
+	expectFieldError(t, e.do(http.MethodPost, "/api/issues/GB-1/move", u.Token, map[string]any{"nextIssueId": ids["GB-1"]}), "nextIssueId")
 }
 
 func TestMoveStatusAndSprint(t *testing.T) {

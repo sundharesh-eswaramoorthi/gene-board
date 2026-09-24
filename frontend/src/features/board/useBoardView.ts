@@ -5,6 +5,7 @@ import {
   deriveFilterOptions,
   epicOf,
   hasActiveFilters,
+  pruneFilters,
   type BoardFilterOptions,
   type BoardFilters,
   type EpicOption,
@@ -35,7 +36,8 @@ function countIssues(columns: BoardColumns): number {
 export function useBoardView(board: BoardResponse | undefined, filters: BoardFilters, meId: ID): BoardView | null {
   const base = useMemo(() => {
     if (!board) return null
-    const byId = new Map<ID, Issue>(board.issues.map((issue) => [issue.id, issue]))
+    // For epic lookups: the board's issues, plus the parents of subtasks that aren't on it.
+    const byId = new Map<ID, Issue>([...board.parents, ...board.issues].map((issue) => [issue.id, issue]))
     const epics = new Map<ID, EpicOption>()
     for (const issue of board.issues) {
       const epic = epicOf(issue, byId)
@@ -47,9 +49,11 @@ export function useBoardView(board: BoardResponse | undefined, filters: BoardFil
 
   return useMemo(() => {
     if (!base) return null
-    const filtered = hasActiveFilters(filters)
+    // Epics and people no longer on the board have no control in the toolbar: ignore them.
+    const effective = pruneFilters(filters, base.options)
+    const filtered = hasActiveFilters(effective)
     const visibleColumns = filtered
-      ? filterColumns(base.columns, createIssueMatcher(filters, { meId, byId: base.byId }))
+      ? filterColumns(base.columns, createIssueMatcher(effective, { meId, byId: base.byId }))
       : base.columns
     return {
       columns: base.columns,

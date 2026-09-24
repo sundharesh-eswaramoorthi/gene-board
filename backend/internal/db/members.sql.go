@@ -122,13 +122,37 @@ func (q *Queries) ListMemberProjectIDs(ctx context.Context, userID int64) ([]int
 	return items, nil
 }
 
+const listMemberProjectKeys = `-- name: ListMemberProjectKeys :many
+SELECT p.key FROM project_members pm JOIN projects p ON p.id = pm.project_id WHERE pm.user_id = $1
+`
+
+func (q *Queries) ListMemberProjectKeys(ctx context.Context, userID int64) ([]string, error) {
+	rows, err := q.db.Query(ctx, listMemberProjectKeys, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		items = append(items, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMemberViews = `-- name: ListMemberViews :many
 SELECT pm.user_id, pm.role, pm.created_at, u.name, u.email
 FROM project_members pm
 JOIN users u ON u.id = pm.user_id
 WHERE pm.project_id = $1
   AND ($2::bigint IS NULL OR pm.user_id = $2::bigint)
-ORDER BY lower(u.name), u.id
+ORDER BY lower(u.name) COLLATE "und-x-icu", u.id
 `
 
 type ListMemberViewsParams struct {
@@ -144,7 +168,8 @@ type ListMemberViewsRow struct {
 	Email     string    `db:"email"`
 }
 
-// ListMemberViews returns members with their user data ordered by name (optionally one user).
+// ListMemberViews returns members with their user data ordered by name (optionally one user),
+// in the Unicode root collation like every name-ordered list (see labels.sql).
 func (q *Queries) ListMemberViews(ctx context.Context, arg ListMemberViewsParams) ([]ListMemberViewsRow, error) {
 	rows, err := q.db.Query(ctx, listMemberViews, arg.ProjectID, arg.UserID)
 	if err != nil {

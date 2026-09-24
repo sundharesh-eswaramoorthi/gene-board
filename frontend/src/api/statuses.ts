@@ -29,7 +29,8 @@ export function useUpdateStatus(key: string) {
   return useMutation({
     mutationFn: ({ id, ...input }: UpdateStatusInput & { id: ID }) =>
       api.patch<Status>(`/projects/${seg(key)}/statuses/${id}`, input),
-    onSuccess: () => invalidateProject(qc, key),
+    // Issues linked from other projects show the renamed (or recategorised) status too.
+    onSuccess: () => invalidateProject(qc, key, { linkedIssues: true }),
   })
 }
 
@@ -58,6 +59,6 @@ export function useDeleteStatus(key: string) {
   return useMutation({
     mutationFn: ({ id, moveTo }: { id: ID; moveTo?: ID | null }) =>
       api.delete(`/projects/${seg(key)}/statuses/${id}`, { moveTo }),
-    onSuccess: () => invalidateProject(qc, key),
+    onSuccess: () => invalidateProject(qc, key, { linkedIssues: true }),
   })
 }

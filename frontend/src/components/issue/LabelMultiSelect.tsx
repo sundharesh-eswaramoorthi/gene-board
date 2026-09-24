@@ -4,6 +4,7 @@ import type { ID, Label } from '@/api/types'
 import { useCreateLabel, useLabels } from '@/api/labels'
 import { Combobox, type ComboboxOption } from '@/components/ui/Combobox'
 import { toastError } from '@/components/ui/toast'
+import { charCount } from '@/lib/chars'
 import { cn } from '@/lib/cn'
 import { hashString, LABEL_COLORS } from '@/lib/colors'
 import { LabelChip } from './LabelChip'
@@ -158,7 +159,7 @@ export function LabelMultiSelect({
           </span>
         ),
       }))
-    if (allowCreate && q && q.length <= 40 && !all.some((l) => l.name.toLowerCase() === needle)) {
+    if (allowCreate && q && charCount(q) <= 40 && !all.some((l) => l.name.toLowerCase() === needle)) {
       list.push({
         value: CREATE,
         label: `Create “${q}”`,

@@ -17,7 +17,7 @@ export function RecentActivity() {
       <div className="rounded-lg border border-border bg-surface p-4">
         {feed.isPending ? (
           <ActivityTimelineSkeleton rows={5} />
-        ) : feed.isError ? (
+        ) : feed.isLoadingError ? (
           <ErrorState size="sm" error={feed.error} title="Couldn’t load activity" onRetry={() => void feed.refetch()} />
         ) : feed.data.length === 0 ? (
           <EmptyState

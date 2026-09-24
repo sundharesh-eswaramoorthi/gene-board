@@ -1,7 +1,9 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { FolderX } from 'lucide-react'
 import { createContext, Suspense, use, useEffect } from 'react'
 import { Link, Navigate, Outlet, useLocation, useParams } from 'react-router'
 import { useProject } from '@/api/projects'
+import { qk } from '@/api/queryKeys'
 import type { Project } from '@/api/types'
 import { buttonClasses } from '@/components/ui/Button'
 import { EmptyState, ErrorState } from '@/components/ui/EmptyState'
@@ -49,6 +51,7 @@ function SidebarSkeleton() {
 export function ProjectLayout() {
   const { projectKey: rawKey = '' } = useParams()
   const location = useLocation()
+  const qc = useQueryClient()
   const projectKey = rawKey.toUpperCase()
   const project = useProject(projectKey)
   const loadedKey = project.data?.key
@@ -60,6 +63,12 @@ export function ProjectLayout() {
   useEffect(() => {
     if (loadedKey) recordRecentProject(loadedKey)
   }, [loadedKey])
+
+  // A project that is gone must leave the project menu and the dashboard too. Only the list is
+  // refreshed: removing the project's own query, which this layout observes, would refetch it.
+  useEffect(() => {
+    if (accessLost) void qc.invalidateQueries({ queryKey: qk.projects() })
+  }, [accessLost, projectKey, qc])
 
   // Canonical upper-case keys in the URL (/projects/gb/board → /projects/GB/board).
   if (rawKey !== projectKey) {
@@ -78,10 +87,13 @@ export function ProjectLayout() {
     )
   }
 
-  if (project.isError) {
+  // A failed background refetch keeps the cached project on screen, so an API blip doesn't
+  // unmount the page (and its filters and drafts). Only a lost project or a failed first load
+  // replaces it.
+  if (accessLost || project.isLoadingError) {
     return (
       <div className="flex h-full items-center justify-center">
-        {project.error.status === 404 ? (
+        {accessLost ? (
           <EmptyState
             icon={<FolderX />}
             title="Project not found"

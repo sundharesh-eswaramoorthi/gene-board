@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, replaceSessionToken } from './client'
+import { api, patchSession } from './client'
 import { qk } from './queryKeys'
 import type { QueryOptions } from './queryClient'
 import type { AuthResponse, LoginInput, RegisterInput, UpdateMeInput, User } from './types'
@@ -27,18 +27,14 @@ export function useMe(options?: QueryOptions<User>) {
 /**
  * PATCH /auth/me — `{ name? , currentPassword?, newPassword? }` → `{ token, user }`. A wrong
  * current password is a 400 `validation_error` with `fields.currentPassword`. The session
- * switches to the returned token before anything refetches: a password change revokes every
- * older token, including the one this request was sent with. Refreshes every cached query on
- * success (the user's name appears across projects).
+ * switches to the returned token before anything refetches (see patchSession): a password
+ * change revokes every older token, including the one this request was sent with. Refreshes
+ * every cached query on success (the user's name appears across projects).
  */
 export function useUpdateMe() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (input: UpdateMeInput) => {
-      const res = await api.patch<AuthResponse>('/auth/me', input)
-      replaceSessionToken(res.token)
-      return res.user
-    },
+    mutationFn: async (input: UpdateMeInput) => (await patchSession<AuthResponse>('/auth/me', input)).user,
     onSuccess: (user) => {
       qc.setQueryData(qk.me(), user)
       return qc.invalidateQueries({ predicate: (q) => q.queryKey[0] !== 'me' })

@@ -55,8 +55,8 @@ export interface EpicOption {
 
 /**
  * The epic an issue belongs to: its parent when that is an epic; for a subtask, the epic of its
- * parent issue (looked up among the board's issues — a subtask always shares its parent's sprint,
- * so the parent is normally on the board too).
+ * parent issue, looked up in `byId` (the board's issues plus `BoardResponse.parents`, the parents
+ * a Kanban board leaves out).
  */
 export function epicOf(issue: Issue, byId: ReadonlyMap<ID, Issue>): EpicOption | null {
   const parent = issue.parent
@@ -122,6 +122,22 @@ export function deriveFilterOptions(issues: readonly Issue[], byId: ReadonlyMap<
     hasIssuesWithoutEpic,
     hasSubtasks,
   }
+}
+
+/**
+ * The filters without the epic and assignee values the toolbar no longer offers (the epic was
+ * deleted, the person removed, or their last issue left the board): those would narrow the
+ * board with no visible control to turn them off. Returns `filters` itself when nothing is dropped.
+ */
+export function pruneFilters(filters: BoardFilters, options: BoardFilterOptions): BoardFilters {
+  const epics = new Set<EpicFilterValue>(options.epics.map((epic) => epic.id))
+  if (options.hasIssuesWithoutEpic) epics.add('none')
+  const assignees = new Set<AssigneeFilterValue>(options.assignees.map((user) => user.id))
+  if (options.hasUnassigned) assignees.add('none')
+  const keptEpics = filters.epics.filter((value) => epics.has(value))
+  const keptAssignees = filters.assignees.filter((value) => assignees.has(value))
+  if (keptEpics.length === filters.epics.length && keptAssignees.length === filters.assignees.length) return filters
+  return { ...filters, epics: keptEpics, assignees: keptAssignees }
 }
 
 /** Add `value` to the list, or remove it when already present. */

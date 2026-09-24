@@ -76,7 +76,8 @@ test('issue modal: edit every field, comment, link, read the history, open the f
   await view.getByRole('button', { name: 'Add a comment…' }).click()
   await view.getByRole('textbox', { name: 'Add a comment' }).fill('Looks good — shipping behind a flag.')
   await view.getByRole('textbox', { name: 'Add a comment' }).press('ControlOrMeta+Enter')
-  await expect(view.getByText('Looks good — shipping behind a flag.')).toBeVisible()
+  // The posted text as rendered: the read-only composer may still hold it for a moment.
+  await expect(view.getByRole('paragraph').filter({ hasText: 'Looks good — shipping behind a flag.' })).toBeVisible()
   await expect.poll(async () => (await owner.api.get<unknown[]>(`/issues/${issue.key}/comments`)).length).toBe(1)
 
   // --- link to the other issue ("blocks")

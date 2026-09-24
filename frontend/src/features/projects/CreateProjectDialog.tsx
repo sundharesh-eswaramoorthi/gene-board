@@ -10,6 +10,7 @@ import { Field } from '@/components/ui/Field'
 import { Input } from '@/components/ui/Input'
 import { Textarea } from '@/components/ui/Textarea'
 import { toast, toastError } from '@/components/ui/toast'
+import { charCount } from '@/lib/chars'
 import { fieldErrors, isApiStatus } from '@/lib/errors'
 import { validateProjectKey } from '@/lib/projectKey'
 import { sanitizeKeyInput, suggestUniqueKey } from './projectKeys'
@@ -50,7 +51,7 @@ export function CreateProjectDialog({ open, onClose }: CreateProjectDialogProps)
   const trimmedName = name.trim()
   const nameProblem = !trimmedName
     ? 'Name is required'
-    : trimmedName.length > NAME_MAX
+    : charCount(trimmedName) > NAME_MAX
       ? `Name must be at most ${NAME_MAX} characters`
       : null
   const keyProblem = validateProjectKey(key) ?? (takenKeys.has(key) ? 'A project with this key already exists' : null)

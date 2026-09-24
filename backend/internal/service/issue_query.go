@@ -67,7 +67,7 @@ var issueSorts = map[string]issueSort{
 	"priority": {exprs: []string{"CASE i.priority WHEN 'highest' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END"}},
 	"key":      {exprs: []string{"p.key", "i.number"}},
 	"dueDate":  {exprs: []string{"i.due_date"}, nullsLast: true},
-	"summary":  {exprs: []string{"lower(i.summary)"}},
+	"summary":  {exprs: []string{`lower(i.summary) COLLATE "und-x-icu"`}}, // like names (queries/labels.sql)
 }
 
 // ParseIssueSearch parses GET /issues query parameters. Empty values are ignored; lists

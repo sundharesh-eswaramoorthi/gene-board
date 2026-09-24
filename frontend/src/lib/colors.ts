@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react'
+import { splitGraphemes } from './format'
 
 /**
  * Fixed brand colour lists (identical in both themes). These are the only hex colours
@@ -74,18 +75,20 @@ export function epicColor(epicId: number): string {
 
 /**
  * Initials for an avatar: first + last word initials ("Alex Morgan" → "AM"),
- * or up to two letters of a single word ("sam" → "SA").
+ * or up to two letters of a single word ("sam" → "SA"). Whole characters, so a name starting
+ * with an emoji or a character outside the BMP ("Sam 🚀" → "S🚀") never shows half of one.
  */
 export function initials(name: string | null | undefined): string {
   const words = (name ?? '').trim().split(/\s+/).filter(Boolean)
   if (words.length === 0) return '?'
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
-  return (words[0][0] + words[words.length - 1][0]).toUpperCase()
+  if (words.length === 1) return splitGraphemes(words[0]).slice(0, 2).join('').toUpperCase()
+  return (splitGraphemes(words[0])[0] + splitGraphemes(words[words.length - 1])[0]).toUpperCase()
 }
 
 /**
  * Inline style for the `chip-tint` utility: `<span className="chip-tint" style={chipStyle(c)}>`.
- * The tint mixes the colour with the current theme so any hex stays legible.
+ * The tint mixes the colour with the current theme and keeps the text's lightness in a
+ * readable range, so any hex stays legible (see `chip-tint` in index.css).
  */
 export function chipStyle(color: string): CSSProperties {
   return { '--chip-color': color } as CSSProperties

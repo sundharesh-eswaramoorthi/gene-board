@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { API_BASE } from '@/api/client'
+import { refreshProject } from '@/api/invalidate'
 import { qk } from '@/api/queryKeys'
 import type { RealtimeEvent } from '@/api/types'
 import { useAuth } from '@/auth/AuthProvider'
@@ -9,6 +10,8 @@ const DEBOUNCE_MS = 300
 const MAX_WAIT_MS = 1500
 const BASE_RETRY_MS = 1000
 const MAX_RETRY_MS = 30_000
+/** Close code the server uses once the token or the project access was revoked. */
+const CLOSE_POLICY_VIOLATION = 1008
 
 function socketUrl(projectKey: string, token: string): string {
   const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws'
@@ -27,10 +30,13 @@ function parseEvent(data: unknown): RealtimeEvent | null {
 
 /**
  * Live updates for a project: opens `/api/projects/{key}/ws?token=…` and treats every event as
- * a cache-invalidation hint — `['project', KEY]`, `['issues']` and `['activity']` are
- * invalidated (debounced ~300ms; `['projects']` too for project changes). Reconnects with
- * exponential backoff (1s → 30s, jittered) and refreshes after reconnecting to catch missed
- * events. Closes on unmount / key change. Mounted by ProjectLayout.
+ * a cache-invalidation hint — `['project', KEY]`, `['issues']`, `['activity']` and other
+ * projects' issue details (they show linked issues) are refreshed with `refreshProject`, which
+ * never cancels a refetch already running (debounced ~300ms; `['projects']` too for project
+ * changes). Reconnects with exponential backoff (1s → 30s, jittered) and refreshes after
+ * reconnecting to catch missed events. A socket the server closed for policy reasons, or one
+ * that never opened, triggers a request that signs out a session that has ended. Closes on
+ * unmount / key change. Mounted by ProjectLayout.
  */
 export function useProjectRealtime(projectKey: string | null | undefined): void {
   const qc = useQueryClient()
@@ -51,13 +57,9 @@ export function useProjectRealtime(projectKey: string | null | undefined): void 
     const flush = () => {
       debounceTimer = undefined
       firstPendingAt = 0
-      void qc.invalidateQueries({ queryKey: qk.project(key) })
-      void qc.invalidateQueries({ queryKey: qk.issues() })
-      void qc.invalidateQueries({ queryKey: qk.activityFeed() })
-      if (refreshProjects) {
-        refreshProjects = false
-        void qc.invalidateQueries({ queryKey: qk.projects() })
-      }
+      const projects = refreshProjects
+      refreshProjects = false
+      void refreshProject(qc, key, { projects, linkedIssues: true })
     }
 
     const schedule = () => {
@@ -72,7 +74,9 @@ export function useProjectRealtime(projectKey: string | null | undefined): void 
       if (disposed) return
       const ws = new WebSocket(socketUrl(key, token))
       socket = ws
+      let opened = false
       ws.onopen = () => {
+        opened = true
         // After a reconnect we may have missed events: refresh once.
         if (attempt > 0) schedule()
         attempt = 0
@@ -84,9 +88,17 @@ export function useProjectRealtime(projectKey: string | null | undefined): void 
         if (event.type === 'project.changed') refreshProjects = true
         schedule()
       }
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (socket === ws) socket = null
         if (disposed) return
+        // Reconnecting with the same token cannot revive a session that has ended (password
+        // changed elsewhere, token expired), and an idle board makes no other request that
+        // would notice. So ask the API, where a 401 signs out. On 1008 (the server found the
+        // token or the project access revoked) refresh the project: 401 signs out, 404 shows
+        // "not found". A socket that never opened may have been refused for the same reasons
+        // (browsers hide the handshake's status): check the session, a cheap request.
+        if (event.code === CLOSE_POLICY_VIOLATION) schedule()
+        else if (!opened) void qc.invalidateQueries({ queryKey: qk.me() })
         const delay = Math.min(MAX_RETRY_MS, BASE_RETRY_MS * 2 ** attempt) * (0.8 + Math.random() * 0.4)
         attempt += 1
         reconnectTimer = window.setTimeout(connect, delay)

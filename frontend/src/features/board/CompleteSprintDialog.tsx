@@ -45,7 +45,7 @@ function computeStats(issues: readonly Issue[]): SprintStats {
 /**
  * Open subtasks whose parent is done. Only open parents move out of a completed sprint (and
  * take their subtasks along), so these stay behind in the completed sprint, where neither the
- * board nor the backlog shows them.
+ * Scrum board nor the backlog shows them (a Kanban board shows every issue).
  */
 function strandedSubtasks(issues: readonly Issue[]): Issue[] {
   return issues.filter((i) => i.type === 'subtask' && !isDone(i) && i.parent?.status.category === 'done')
@@ -64,9 +64,14 @@ export interface CompleteSprintDialogProps {
   sprint: Sprint
   /** The sprint's issues (the board's issues; subtasks are needed to spot stranded ones). */
   issues: readonly Issue[]
+  /** Some of `issues` are still loading: submit waits, so stranded subtasks are pointed out first. */
+  issuesLoading?: boolean
   statuses: readonly Status[]
-  /** Offer "New sprint" as the target (not for sprints left over in a Kanban project). */
-  allowNewSprint?: boolean
+  /**
+   * A sprint left over in a Kanban project (switched from Scrum): Kanban plans no sprints, so its
+   * open issues go to the backlog, and the board keeps showing its stranded subtasks.
+   */
+  kanban?: boolean
 }
 
 /**
@@ -80,30 +85,38 @@ export function CompleteSprintDialog({
   projectKey,
   sprint,
   issues,
+  issuesLoading = false,
   statuses,
-  allowNewSprint = true,
+  kanban = false,
 }: CompleteSprintDialogProps) {
   const complete = useCompleteSprint(projectKey)
-  const planned = useSprints(projectKey, PLANNED, { enabled: open })
-  const plannedSprints = (planned.data ?? []).filter((s) => s.state === 'planned' && s.id !== sprint.id)
+  const planned = useSprints(projectKey, PLANNED, { enabled: open && !kanban })
+  const plannedSprints = kanban ? [] : (planned.data ?? []).filter((s) => s.state === 'planned' && s.id !== sprint.id)
 
   // Frozen on submit, so the numbers don't drop to zero while the board refetches.
   const [frozen, setFrozen] = useState<{ stats: SprintStats; stranded: Issue[] } | null>(null)
   const stats = frozen?.stats ?? computeStats(issues)
   const stranded = frozen?.stranded ?? strandedSubtasks(issues)
 
+  const options: { value: TargetValue; label: string }[] = [
+    { value: 'backlog', label: 'Backlog' },
+    ...plannedSprints.map((s) => ({ value: `sprint:${s.id}` as const, label: s.name })),
+    ...(kanban ? [] : [{ value: 'new' as const, label: 'New sprint' }]),
+  ]
   const [choice, setChoice] = useState<TargetValue | null>(null)
   const defaultTarget: TargetValue = plannedSprints[0] ? `sprint:${plannedSprints[0].id}` : 'backlog'
-  const target = choice ?? defaultTarget
-  const targetSprint = target.startsWith('sprint:') ? plannedSprints.find((s) => `sprint:${s.id}` === target) : undefined
+  // A chosen sprint that was deleted meanwhile is no longer an option: fall back to the default
+  // (what the select then shows), so what is sent always matches what is shown.
+  const target = choice && options.some((o) => o.value === choice) ? choice : defaultTarget
+  const targetSprint = plannedSprints.find((s) => `sprint:${s.id}` === target)
 
   const doneColumns = statuses.filter((s) => s.category === 'done').map((s) => s.name)
   const hasOpen = stats.open > 0
-  const waitingForSprints = hasOpen && planned.isPending
+  const waitingForSprints = hasOpen && !kanban && planned.isPending
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (complete.isPending || waitingForSprints) return
+    if (complete.isPending || waitingForSprints || issuesLoading) return
     setFrozen({ stats, stranded })
     try {
       const result = await complete.mutateAsync({ id: sprint.id, ...toInput(hasOpen ? target : 'backlog') })
@@ -121,12 +134,6 @@ export function CompleteSprintDialog({
       toastError(error, 'Couldn’t complete the sprint')
     }
   }
-
-  const options = [
-    { value: 'backlog', label: 'Backlog' },
-    ...plannedSprints.map((s) => ({ value: `sprint:${s.id}`, label: s.name })),
-    ...(allowNewSprint ? [{ value: 'new', label: 'New sprint' }] : []),
-  ]
 
   const targetHint =
     target === 'new'
@@ -157,6 +164,9 @@ export function CompleteSprintDialog({
             variant="primary"
             loading={complete.isPending}
             disabled={waitingForSprints}
+            // Waiting for the issues: aria-disabled (not disabled), so it still takes the initial
+            // focus when there is no target to choose.
+            aria-disabled={issuesLoading || undefined}
             data-autofocus={hasOpen ? undefined : true}
             data-testid="complete-sprint-submit"
           >
@@ -213,13 +223,13 @@ export function CompleteSprintDialog({
               data-testid="complete-sprint-target"
             />
           </Field>
-        ) : stranded.length === 0 ? (
+        ) : stranded.length === 0 && !issuesLoading ? (
           <p className="flex items-center gap-2 rounded-md bg-success-subtle px-3 py-2 text-sm text-success">
             <CircleCheck className="size-4 shrink-0" aria-hidden />
             Every issue in this sprint is done. Nice work!
           </p>
         ) : null}
-        {stranded.length > 0 && <StrandedSubtasks subtasks={stranded} />}
+        {stranded.length > 0 && <StrandedSubtasks subtasks={stranded} kanban={kanban} />}
       </div>
     </Dialog>
   )
@@ -256,7 +266,7 @@ function StatTile({
 }
 
 /** Warning listing open subtasks of done issues, which stay in the completed sprint. */
-function StrandedSubtasks({ subtasks }: { subtasks: readonly Issue[] }) {
+function StrandedSubtasks({ subtasks, kanban }: { subtasks: readonly Issue[]; kanban: boolean }) {
   const shown = subtasks.slice(0, 5)
   return (
     <div
@@ -271,8 +281,10 @@ function StrandedSubtasks({ subtasks }: { subtasks: readonly Issue[] }) {
             : `${subtasks.length} open subtasks stay in this sprint`}
         </p>
         <p className="mt-0.5 text-fg-muted">
-          Their parent issues are done, and subtasks always stay with their parent. Once the sprint is completed they
-          won’t appear on the board or in the backlog — finish them, or reopen their parent to carry them over.
+          Their parent issues are done, and subtasks always stay with their parent.{' '}
+          {kanban
+            ? 'They stay on the board, but keep this sprint once it is completed — finish them, or reopen their parent to clear their sprint.'
+            : 'Once the sprint is completed they won’t appear on the board or in the backlog — finish them, or reopen their parent to carry them over.'}
         </p>
         <ul className="mt-1.5 flex flex-col gap-1">
           {shown.map((subtask) => (

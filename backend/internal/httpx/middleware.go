@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"runtime/debug"
 	"slices"
@@ -184,14 +185,21 @@ func Deadlines(read, write time.Duration, exempt func(*http.Request) bool) func(
 
 // RejectInvalidText answers 400 bad_request for requests whose path or query string holds
 // text PostgreSQL cannot store or compare (NUL characters or invalid UTF-8, e.g. ?q=%00 or
-// %FF). Request bodies are validated field by field by the service layer.
+// %FF), and for malformed query strings (a bad escape such as %ZZ, or a ';' separator):
+// r.URL.Query() silently drops such a parameter, which would widen a search instead of
+// failing it. Request bodies are validated field by field by the service layer.
 func RejectInvalidText(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !ValidText(r.URL.Path) {
 			WriteError(w, r, BadRequest("Invalid characters in the request path"))
 			return
 		}
-		for name, values := range r.URL.Query() {
+		query, err := url.ParseQuery(r.URL.RawQuery)
+		if err != nil {
+			WriteError(w, r, BadRequest("Malformed query string"))
+			return
+		}
+		for name, values := range query {
 			if !ValidText(name) {
 				WriteError(w, r, BadRequest("Invalid characters in the query string"))
 				return

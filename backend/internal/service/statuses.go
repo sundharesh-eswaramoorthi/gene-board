@@ -48,7 +48,7 @@ func (s *Service) ListStatuses(ctx context.Context, userID int64, key string) ([
 
 // CreateStatus appends a status to the workflow (admin only).
 func (s *Service) CreateStatus(ctx context.Context, userID int64, key string, in CreateStatusInput) (dto.Status, error) {
-	name := strings.TrimSpace(in.Name)
+	name := cleanName(in.Name)
 	category := strings.TrimSpace(in.Category)
 	var fe httpx.FieldErrors
 	checkLength(&fe, "name", name, 1, maxStatusName)
@@ -64,8 +64,8 @@ func (s *Service) CreateStatus(ctx context.Context, userID int64, key string, in
 		if err != nil {
 			return err
 		}
-		if err := t.q.LockProject(ctx, acc.project.ID); err != nil {
-			return fmt.Errorf("lock project: %w", err)
+		if acc, err = s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleAdmin); err != nil {
+			return err
 		}
 		pos, err := t.q.NextStatusPosition(ctx, acc.project.ID)
 		if err != nil {
@@ -102,8 +102,8 @@ func (s *Service) UpdateStatus(ctx context.Context, userID int64, key string, st
 		if err != nil {
 			return err
 		}
-		if err := t.q.LockProject(ctx, acc.project.ID); err != nil {
-			return fmt.Errorf("lock project: %w", err)
+		if acc, err = s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleAdmin); err != nil {
+			return err
 		}
 		cur, err := t.q.LockStatus(ctx, statusID)
 		if cur, err = statusInProject(cur, err, acc.project.ID); err != nil {
@@ -115,7 +115,7 @@ func (s *Service) UpdateStatus(ctx context.Context, userID int64, key string, st
 			if in.Name.Null {
 				fe.Add("name", "must not be null")
 			} else {
-				next.Name = strings.TrimSpace(in.Name.Value)
+				next.Name = cleanName(in.Name.Value)
 				checkLength(&fe, "name", next.Name, 1, maxStatusName)
 			}
 		}
@@ -167,8 +167,8 @@ func (s *Service) ReorderStatuses(ctx context.Context, userID int64, key string,
 		if err != nil {
 			return err
 		}
-		if err := t.q.LockProject(ctx, acc.project.ID); err != nil {
-			return fmt.Errorf("lock project: %w", err)
+		if acc, err = s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleAdmin); err != nil {
+			return err
 		}
 		current, err := t.q.ListStatuses(ctx, acc.project.ID)
 		if err != nil {
@@ -207,10 +207,10 @@ func (s *Service) DeleteStatus(ctx context.Context, userID int64, key string, st
 		if err != nil {
 			return err
 		}
-		pid := acc.project.ID
-		if err := t.q.LockProject(ctx, pid); err != nil {
-			return fmt.Errorf("lock project: %w", err)
+		if acc, err = s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleAdmin); err != nil {
+			return err
 		}
+		pid := acc.project.ID
 		// Lock the status before counting its issues: an issue write moving an issue into it
 		// either commits first (and is then moved to moveTo below) or waits and finds it gone.
 		st, err := t.q.LockStatus(ctx, statusID)

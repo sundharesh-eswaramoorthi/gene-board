@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"golang.org/x/text/unicode/norm"
+
 	"geneboard/internal/db"
 	"geneboard/internal/dto"
 	"geneboard/internal/httpx"
@@ -49,7 +51,7 @@ var ErrWrongCurrentPassword = httpx.Validation("currentPassword", "is incorrect"
 // Register creates a user account and returns a token for it.
 func (s *Service) Register(ctx context.Context, in RegisterInput) (dto.AuthResponse, error) {
 	email := normalizeEmail(in.Email)
-	name := strings.TrimSpace(in.Name)
+	name := cleanName(in.Name)
 	var fe httpx.FieldErrors
 	checkEmail(&fe, "email", email)
 	checkLength(&fe, "name", name, 1, maxUserName)
@@ -146,10 +148,10 @@ func (s *Service) UpdateMe(ctx context.Context, token string, in UpdateMeInput) 
 		if in.Name.Null {
 			fe.Add("name", "must not be null")
 		} else {
-			trimmed := strings.TrimSpace(in.Name.Value)
-			checkLength(&fe, "name", trimmed, 1, maxUserName)
-			if trimmed != user.Name {
-				name = &trimmed
+			cleaned := cleanName(in.Name.Value)
+			checkLength(&fe, "name", cleaned, 1, maxUserName)
+			if cleaned != user.Name {
+				name = &cleaned
 			}
 		}
 	}
@@ -231,10 +233,11 @@ const (
 )
 
 // SearchUsers finds users whose name or e-mail contains query (case-insensitive), ordered
-// by name. An empty query lists the first users by name.
+// by name. An empty query lists the first users by name. The query is brought to NFC like
+// the names and addresses it matches.
 func (s *Service) SearchUsers(ctx context.Context, query string, limit int) ([]dto.UserSummary, error) {
 	rows, err := s.q.SearchUsers(ctx, db.SearchUsersParams{
-		Pattern:    escapeLike(strings.TrimSpace(query)),
+		Pattern:    escapeLike(norm.NFC.String(strings.TrimSpace(query))),
 		MaxResults: int32(clampLimit(limit, DefaultUserSearchLimit, MaxUserSearchLimit)),
 	})
 	if err != nil {

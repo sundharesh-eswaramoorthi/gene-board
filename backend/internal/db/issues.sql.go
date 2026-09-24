@@ -386,6 +386,68 @@ func (q *Queries) ListChildIssues(ctx context.Context, parentID int64) ([]Issue,
 	return items, nil
 }
 
+const listCrossProjectLinkedIssues = `-- name: ListCrossProjectLinkedIssues :many
+SELECT o.id, o.project_id, o.number, o.key, o.type, o.summary, o.description, o.status_id, o.priority, o.assignee_id, o.reporter_id, o.parent_id, o.sprint_id, o.story_points, o.due_date, o.rank, o.resolved_at, o.created_at, o.updated_at FROM issues o
+WHERE o.project_id <> $1::bigint
+  AND o.id IN (
+    SELECT CASE WHEN l.source_id = i.id THEN l.target_id ELSE l.source_id END
+    FROM issues i
+    JOIN issue_links l ON i.id IN (l.source_id, l.target_id)
+    WHERE i.project_id = $1::bigint
+      AND ($2::bigint[] IS NULL OR i.id = ANY($2::bigint[]))
+  )
+ORDER BY o.id
+`
+
+type ListCrossProjectLinkedIssuesParams struct {
+	ProjectID int64   `db:"project_id"`
+	IssueIds  []int64 `db:"issue_ids"`
+}
+
+// ListCrossProjectLinkedIssues returns the issues of other projects that are linked (in
+// either direction) to issues of project_id: to the issues in issue_ids, or to any issue of
+// the project when issue_ids is null. Deleting those issues (or the project) removes the
+// links by cascade, so the other projects' subscribers must be told.
+func (q *Queries) ListCrossProjectLinkedIssues(ctx context.Context, arg ListCrossProjectLinkedIssuesParams) ([]Issue, error) {
+	rows, err := q.db.Query(ctx, listCrossProjectLinkedIssues, arg.ProjectID, arg.IssueIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Issue{}
+	for rows.Next() {
+		var i Issue
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.Number,
+			&i.Key,
+			&i.Type,
+			&i.Summary,
+			&i.Description,
+			&i.StatusID,
+			&i.Priority,
+			&i.AssigneeID,
+			&i.ReporterID,
+			&i.ParentID,
+			&i.SprintID,
+			&i.StoryPoints,
+			&i.DueDate,
+			&i.Rank,
+			&i.ResolvedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listIssuesByIDs = `-- name: ListIssuesByIDs :many
 SELECT id, project_id, number, key, type, summary, description, status_id, priority, assignee_id, reporter_id, parent_id, sprint_id, story_points, due_date, rank, resolved_at, created_at, updated_at FROM issues WHERE id = ANY($1::bigint[])
 `

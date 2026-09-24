@@ -66,6 +66,10 @@ func (s *Service) AddMember(ctx context.Context, userID int64, key string, in Ad
 		if err != nil {
 			return err
 		}
+		// Membership changes are serialised on the project lock (see lockMember).
+		if acc, err = s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleAdmin); err != nil {
+			return err
+		}
 		user, err := t.q.GetUserByEmail(ctx, email)
 		if isNoRows(err) {
 			return httpx.NotFound("No user with email %s", email)
@@ -102,7 +106,7 @@ func (s *Service) UpdateMember(ctx context.Context, userID int64, key string, me
 		if err != nil {
 			return err
 		}
-		member, err := lockMember(ctx, t.q, acc.project.ID, memberID)
+		acc, member, err := s.lockMember(ctx, t, userID, acc.project.ID, RoleAdmin, memberID)
 		if err != nil {
 			return err
 		}
@@ -127,17 +131,16 @@ func (s *Service) UpdateMember(ctx context.Context, userID int64, key string, me
 // cannot be removed. The removed user's assigned issues in the project become unassigned
 // (logged as assignee changes) and they stop being the project lead.
 func (s *Service) RemoveMember(ctx context.Context, userID int64, key string, memberID int64) error {
+	minRole := RoleAdmin
+	if memberID == userID {
+		minRole = RoleViewer // leaving the project
+	}
 	return s.inTx(ctx, func(t *txn) error {
-		acc, err := s.projectByKey(ctx, t.q, userID, key, RoleViewer)
+		acc, err := s.projectByKey(ctx, t.q, userID, key, minRole)
 		if err != nil {
 			return err
 		}
-		if memberID != userID {
-			if err := requireRole(acc.role, RoleAdmin); err != nil {
-				return err
-			}
-		}
-		member, err := lockMember(ctx, t.q, acc.project.ID, memberID)
+		acc, member, err := s.lockMember(ctx, t, userID, acc.project.ID, minRole, memberID)
 		if err != nil {
 			return err
 		}
@@ -172,19 +175,22 @@ func (s *Service) RemoveMember(ctx context.Context, userID int64, key string, me
 }
 
 // lockMember serialises membership changes of a project (so two admins cannot demote each
-// other concurrently) and loads the target membership.
-func lockMember(ctx context.Context, q *db.Queries, projectID, memberID int64) (db.ProjectMember, error) {
-	if err := q.LockProject(ctx, projectID); err != nil {
-		return db.ProjectMember{}, fmt.Errorf("lock project: %w", err)
+// other concurrently, and an admin being demoted or removed cannot act on the role they
+// had): it takes the project lock, checks the caller's role (min) again under it and loads
+// the target membership.
+func (s *Service) lockMember(ctx context.Context, t *txn, userID, projectID int64, min Role, memberID int64) (projectAccess, db.ProjectMember, error) {
+	acc, err := s.lockProjectAs(ctx, t, userID, projectID, min)
+	if err != nil {
+		return projectAccess{}, db.ProjectMember{}, err
 	}
-	member, err := q.GetMember(ctx, db.GetMemberParams{ProjectID: projectID, UserID: memberID})
+	member, err := t.q.GetMember(ctx, db.GetMemberParams{ProjectID: projectID, UserID: memberID})
 	if isNoRows(err) {
-		return db.ProjectMember{}, errMemberNotFound
+		return projectAccess{}, db.ProjectMember{}, errMemberNotFound
 	}
 	if err != nil {
-		return db.ProjectMember{}, fmt.Errorf("load member: %w", err)
+		return projectAccess{}, db.ProjectMember{}, fmt.Errorf("load member: %w", err)
 	}
-	return member, nil
+	return acc, member, nil
 }
 
 func ensureAnotherAdmin(ctx context.Context, q *db.Queries, projectID int64) error {

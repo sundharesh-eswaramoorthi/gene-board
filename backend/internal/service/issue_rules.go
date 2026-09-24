@@ -17,7 +17,10 @@ import (
 // Shared validation of issue references (SPEC §2 hierarchy / sprint rules). Every helper
 // reports client mistakes as validation errors on the corresponding request field.
 
-const msgSubtaskSprint = "must match the parent's sprint (subtasks always share their parent's sprint)"
+const (
+	msgSubtaskSprint = "must match the parent's sprint (subtasks always share their parent's sprint)"
+	msgKanbanSprint  = "must be empty (Kanban projects do not use sprints)"
+)
 
 // resolveIssueStatus loads a status of the project for the statusId field.
 func resolveIssueStatus(ctx context.Context, q *db.Queries, projectID, statusID int64) (db.Status, error) {
@@ -76,12 +79,17 @@ func resolveParent(ctx context.Context, q *db.Queries, projectID int64, issueTyp
 	return &parent, nil
 }
 
-// resolveSprint validates that sprintID is a planned or active sprint of the project. The
-// sprint row is share-locked for the rest of the transaction so that it cannot be
-// completed or deleted while an issue is being put into it.
-func resolveSprint(ctx context.Context, q *db.Queries, projectID, sprintID int64) (db.Sprint, error) {
+// resolveSprint validates that sprintID is a planned or active sprint of p, for an issue
+// being put into it. A Kanban project's issues cannot join a sprint, not even one left over
+// from before the project switched from Scrum (they can only leave it). The sprint row is
+// share-locked for the rest of the transaction so that it cannot be completed or deleted
+// while an issue is being put into it. p must have been read under the project lock.
+func resolveSprint(ctx context.Context, q *db.Queries, p db.Project, sprintID int64) (db.Sprint, error) {
+	if p.Type == dto.ProjectTypeKanban {
+		return db.Sprint{}, httpx.Validation("sprintId", msgKanbanSprint)
+	}
 	sp, err := q.GetSprintForShare(ctx, sprintID)
-	if isNoRows(err) || (err == nil && sp.ProjectID != projectID) {
+	if isNoRows(err) || (err == nil && sp.ProjectID != p.ID) {
 		return db.Sprint{}, httpx.Validation("sprintId", "must be a sprint of this project")
 	}
 	if err != nil {
@@ -211,6 +219,11 @@ func (t *txn) syncSubtaskSprints(ctx context.Context, actorID int64, parentIDs [
 //     client whose prev >= next, which the spec resolves as "right after prev");
 //   - only next given: between the rank before next and next;
 //   - neither: the rank is unchanged.
+//
+// A neighbour that is not an issue of this project counts as not given. Usually it was
+// deleted since the client loaded its list, and the stale client's move still applies instead
+// of failing as a whole; an issue of another project is treated alike, so that the response
+// does not tell which issue ids exist in projects the caller may not be a member of.
 func moveRank(ctx context.Context, q *db.Queries, issue db.Issue, prevID, nextID *int64) (string, error) {
 	if prevID == nil && nextID == nil {
 		return issue.Rank, nil
@@ -224,7 +237,7 @@ func moveRank(ctx context.Context, q *db.Queries, issue db.Issue, prevID, nextID
 		}
 		n, err := q.GetIssueByID(ctx, *id)
 		if isNoRows(err) || (err == nil && n.ProjectID != issue.ProjectID) {
-			return nil, httpx.Validation(field, "must be an issue of this project")
+			return nil, nil
 		}
 		if err != nil {
 			return nil, fmt.Errorf("load neighbour: %w", err)
@@ -238,6 +251,9 @@ func moveRank(ctx context.Context, q *db.Queries, issue db.Issue, prevID, nextID
 	next, err := neighbour("nextIssueId", nextID)
 	if err != nil {
 		return "", err
+	}
+	if prev == nil && next == nil {
+		return issue.Rank, nil
 	}
 
 	var lo, hi string

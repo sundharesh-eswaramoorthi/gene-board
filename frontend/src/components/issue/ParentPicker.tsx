@@ -19,7 +19,13 @@ export function ParentPicker({ childType, allowNone, placeholder, noneLabel, ...
   const isSubtask = childType === 'subtask'
   if (types.length === 0) {
     return (
-      <PickerTrigger variant={props.variant} disabled className={props.className} id={props.id} aria-label="No parent">
+      <PickerTrigger
+        variant={props.variant}
+        disabled
+        className={props.className}
+        id={props.id}
+        aria-label={props['aria-label'] ?? (props.fieldLabel ? `${props.fieldLabel}: ${placeholder ?? 'None'}` : 'No parent')}
+      >
         <PickerPlaceholder>{placeholder ?? 'None'}</PickerPlaceholder>
       </PickerTrigger>
     )

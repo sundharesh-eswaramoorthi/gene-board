@@ -1,8 +1,7 @@
 import { Plus } from 'lucide-react'
-import type { KeyboardEvent } from 'react'
 import { useIssues } from '@/api/issues'
 import type { Issue } from '@/api/types'
-import { useCreateIssueModal, useIssueModal } from '@/app/ModalsProvider'
+import { useCreateIssueModal } from '@/app/ModalsProvider'
 import {
   IssueKeyLink,
   IssueTypeIcon,
@@ -44,7 +43,7 @@ export function EpicChildren({ projectKey, epic, expectedCount, canEdit }: EpicC
         className="overflow-hidden rounded-md border border-border bg-surface"
       />
     )
-  } else if (children.isError) {
+  } else if (children.isLoadingError) {
     body = (
       <ErrorState
         size="sm"
@@ -94,38 +93,31 @@ export function EpicChildren({ projectKey, epic, expectedCount, canEdit }: EpicC
   )
 }
 
+/** A child issue: the key and summary are one link stretched over the row (like `IssueRefRow`). */
 function ChildIssueRow({ issue }: { issue: Issue }) {
-  const { openIssue } = useIssueModal()
   const done = isDone(issue)
-  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.target !== e.currentTarget) return
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault()
-      openIssue(issue.key)
-    }
-  }
   return (
-    <li className="border-b border-border last:border-b-0">
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label={`${issue.key}: ${issue.summary}`}
-        onClick={() => openIssue(issue.key)}
-        onKeyDown={onKeyDown}
-        className="flex h-9 cursor-pointer items-center gap-2.5 px-3 text-sm transition-colors hover:bg-surface-hover focus-visible:-outline-offset-2"
+    <li className="relative flex h-9 items-center gap-2.5 border-b border-border px-3 text-sm transition-colors last:border-b-0 focus-within:bg-surface-hover hover:bg-surface-hover">
+      <IssueTypeIcon type={issue.type} />
+      <IssueKeyLink
+        issueKey={issue.key}
+        tone="muted"
+        className="flex min-w-0 flex-1 items-baseline gap-2.5 after:absolute after:inset-0 hover:no-underline"
       >
-        <IssueTypeIcon type={issue.type} />
-        <IssueKeyLink issueKey={issue.key} tone="muted" done={done} className="text-xs" />
-        <span className={cn('min-w-0 flex-1 truncate', done && 'text-fg-muted')}>{issue.summary}</span>
-        <PriorityIcon priority={issue.priority} size="sm" className="hidden @md:inline-flex" />
-        <span className="hidden w-28 shrink-0 justify-end @sm:flex">
-          <StatusLozenge status={issue.status} />
-        </span>
-        <span className="flex w-6 shrink-0 justify-center">
-          <StoryPointsBadge points={issue.storyPoints} />
-        </span>
+        <span className={cn('shrink-0 text-xs', done && 'line-through')}>{issue.key}</span>
+        <span className={cn('truncate font-normal', done ? 'text-fg-muted' : 'text-fg')}>{issue.summary}</span>
+      </IssueKeyLink>
+      <PriorityIcon priority={issue.priority} size="sm" className="hidden @md:inline-flex" />
+      <span className="hidden w-28 shrink-0 justify-end @sm:flex">
+        <StatusLozenge status={issue.status} />
+      </span>
+      <span className="flex w-6 shrink-0 justify-center">
+        <StoryPointsBadge points={issue.storyPoints} />
+      </span>
+      {/* Above the row link, so the name tooltip shows. */}
+      <span className="relative z-10 flex">
         <UserAvatar user={issue.assignee} size="sm" />
-      </div>
+      </span>
     </li>
   )
 }

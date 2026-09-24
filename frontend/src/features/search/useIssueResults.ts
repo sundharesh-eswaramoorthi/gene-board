@@ -102,6 +102,22 @@ export function useIssueResults(filters: IssueFilters, projectKey: string | null
     return sorted.slice(offset, offset + PAGE_SIZE)
   }, [serverSort, all.data, filters.sort, filters.order, offset])
 
+  // Without the statuses the search can't run (sending the category and the ids as they are
+  // would AND them): report why (e.g. the project is gone) instead of loading forever.
+  if (mixed && statuses.isError && statuses.data == null) {
+    return {
+      items: [],
+      total: 0,
+      matchCount: 0,
+      truncated: false,
+      isPending: false,
+      isFetching: statuses.isFetching,
+      isPlaceholderData: false,
+      error: statuses.error,
+      refetch: () => void statuses.refetch(),
+    }
+  }
+
   if (serverSort != null) {
     return {
       items: paged.data?.items ?? [],

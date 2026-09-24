@@ -3,6 +3,8 @@
 //	server [serve]       run migrations, then serve HTTP on $BIND_HOST:$PORT (default)
 //	server migrate       apply database migrations and exit
 //	server seed          load demo data (see internal/seed)
+//	server seed --if-empty
+//	                     load demo data only into a database without users (make up)
 //	server healthcheck   exit 0 if the server on $BIND_HOST:$PORT answers /api/health (container probe)
 package main
 
@@ -15,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -29,7 +32,7 @@ import (
 const (
 	shutdownTimeout    = 15 * time.Second
 	healthcheckTimeout = 3 * time.Second
-	usage              = "usage: server [serve|migrate|seed|healthcheck]"
+	usage              = "usage: server [serve|migrate|seed [--if-empty]|healthcheck]"
 )
 
 func main() {
@@ -47,9 +50,13 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, logger *slog.Logger) error {
-	command := "serve"
+	command, flags := "serve", []string(nil)
 	if len(args) > 0 {
-		command = args[0]
+		command, flags = args[0], args[1:]
+	}
+	seedIfEmpty := command == "seed" && slices.Equal(flags, []string{"--if-empty"})
+	if len(flags) > 0 && !seedIfEmpty {
+		return fmt.Errorf("unexpected arguments %q (%s)", flags, usage)
 	}
 
 	cfg, err := config.Load()
@@ -100,17 +107,13 @@ func run(ctx context.Context, args []string, logger *slog.Logger) error {
 	})
 
 	if command == "seed" {
-		return runSeed(ctx, svc, pool, logger)
+		return runSeed(ctx, svc, pool, logger, seedIfEmpty)
 	}
 	return serve(ctx, cfg, svc, hub, logger)
 }
 
 // serve runs the HTTP server until ctx is cancelled, then shuts down gracefully.
 func serve(ctx context.Context, cfg config.Config, svc *service.Service, hub *realtime.Hub, logger *slog.Logger) error {
-	// Long-lived requests (websockets) derive from baseCtx, cancelled when shutdown starts.
-	baseCtx, cancelBase := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancelBase()
-
 	handler := api.NewRouter(api.Deps{
 		Service: svc, Logger: logger, CORSOrigins: cfg.CORSOrigins,
 		AuthRateLimit: cfg.AuthRateLimit, TrustedProxies: cfg.TrustedProxies,
@@ -118,21 +121,8 @@ func serve(ctx context.Context, cfg config.Config, svc *service.Service, hub *re
 	if cfg.UsingDefaultJWTSecret() { // only on loopback (config.Load): refuse DNS rebinding too
 		handler = loopbackHostsOnly(handler)
 	}
-	srv := &http.Server{
-		Addr:    cfg.Addr(),
-		Handler: handler,
-		// No ReadTimeout/WriteTimeout: they would also cut hijacked websocket connections.
-		// The router bounds every other request itself (httpx.Deadlines); request bodies
-		// are capped at 1 MB by httpx.DecodeJSON.
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		BaseContext:       func(net.Listener) context.Context { return baseCtx },
-		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
-	}
-	srv.RegisterOnShutdown(func() {
-		cancelBase()
-		hub.Close() // closes every websocket subscription
-	})
+	srv, cancelRequests := newHTTPServer(ctx, cfg.Addr(), handler, hub, logger)
+	defer cancelRequests()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -150,13 +140,53 @@ func serve(ctx context.Context, cfg config.Config, svc *service.Service, hub *re
 	}
 
 	logger.Info("shutting down")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("http shutdown: %w", err)
+	if err := shutdown(srv, cancelRequests, shutdownTimeout, logger); err != nil {
+		return err
 	}
 	logger.Info("server stopped")
 	return nil
+}
+
+// shutdown stops srv: it stops accepting connections and waits up to timeout for the
+// requests in progress. Requests still running then (e.g. waiting on a row lock) are
+// cancelled through cancelRequests and their connections closed. That is logged, not
+// returned: an ordinary SIGTERM still exits cleanly.
+func shutdown(srv *http.Server, cancelRequests context.CancelFunc, timeout time.Duration, logger *slog.Logger) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	err := srv.Shutdown(ctx)
+	if errors.Is(err, context.DeadlineExceeded) {
+		logger.Warn("requests still running after the shutdown grace period; cancelling them", "grace_period", timeout)
+		cancelRequests()
+		_ = srv.Close() // Shutdown closed the listeners already; this closes the connections
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("http shutdown: %w", err)
+	}
+	return nil
+}
+
+// newHTTPServer builds the API's server. Requests run under a context that the shutdown
+// signal does not cancel, so srv.Shutdown lets those in progress finish (within
+// shutdownTimeout, see shutdown). Shutdown neither waits for nor cancels websockets
+// (hijacked connections): closing the hub when it starts ends their subscriptions. cancel
+// cancels whatever still runs; call it once Shutdown has returned.
+func newHTTPServer(ctx context.Context, addr string, handler http.Handler, hub *realtime.Hub, logger *slog.Logger) (srv *http.Server, cancel context.CancelFunc) {
+	baseCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	srv = &http.Server{
+		Addr:    addr,
+		Handler: handler,
+		// No ReadTimeout/WriteTimeout: they would also cut hijacked websocket connections.
+		// The router bounds every other request itself (httpx.Deadlines); request bodies
+		// are capped at 1 MB by httpx.DecodeJSON.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		BaseContext:       func(net.Listener) context.Context { return baseCtx },
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelWarn),
+	}
+	srv.RegisterOnShutdown(hub.Close) // closes every websocket subscription
+	return srv, cancel
 }
 
 // healthcheck probes GET /api/health of the server listening on cfg.Addr(). The runtime

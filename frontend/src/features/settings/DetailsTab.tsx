@@ -2,7 +2,7 @@ import { Trash2 } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useUpdateProject } from '@/api/projects'
 import { useSprints } from '@/api/sprints'
-import type { ID, Project, ProjectType, SprintState, UpdateProjectInput } from '@/api/types'
+import type { ID, Project, ProjectType, Sprint, SprintState, UpdateProjectInput } from '@/api/types'
 import { ProjectAvatar } from '@/components/issue/ProjectAvatar'
 import { UserAvatar } from '@/components/issue/UserAvatar'
 import { UserPicker } from '@/components/issue/UserPicker'
@@ -13,6 +13,7 @@ import { useConfirm } from '@/components/ui/ConfirmDialog'
 import { Textarea } from '@/components/ui/Textarea'
 import { toast, toastError } from '@/components/ui/toast'
 import { ProjectTypeCards } from '@/features/projects/ProjectTypeCards'
+import { charCount } from '@/lib/chars'
 import { formatDate } from '@/lib/dates'
 import { fieldErrors } from '@/lib/errors'
 import { PROJECT_TYPE_META } from '@/lib/issueMeta'
@@ -94,6 +95,7 @@ function DetailsForm({ project }: { project: Project }) {
   const [draft, setDraft] = useState(() => draftOf(project))
   const [syncedProject, setSyncedProject] = useState(project)
   const [nameError, setNameError] = useState<string | null>(null)
+  const [checkingSprints, setCheckingSprints] = useState(false)
 
   // Someone else saved (realtime refresh): adopt their values in the fields without local edits.
   if (syncedProject !== project) {
@@ -104,7 +106,15 @@ function DetailsForm({ project }: { project: Project }) {
   const patch = changesOf(draft, project)
   const dirty = Object.keys(patch).length > 0
   const trimmedName = draft.name.trim()
-  const nameProblem = !trimmedName ? 'Name is required' : trimmedName.length > NAME_MAX ? `Name must be at most ${NAME_MAX} characters` : null
+  // Only a name being changed is checked (a saved one is valid), in characters like the server.
+  const nameProblem =
+    patch.name === undefined
+      ? null
+      : !patch.name
+        ? 'Name is required'
+        : charCount(patch.name) > NAME_MAX
+          ? `Name must be at most ${NAME_MAX} characters`
+          : null
 
   const set = <K extends keyof Draft>(field: K, value: Draft[K]) => setDraft((d) => ({ ...d, [field]: value }))
 
@@ -120,20 +130,46 @@ function DetailsForm({ project }: { project: Project }) {
         ? `${TYPE_SWITCH_HINT.kanban} ${listSprints(leftover)} will stay open — complete or delete ${leftover.length === 1 ? 'it' : 'them'} in the backlog first, or afterwards from the Kanban backlog.`
         : TYPE_SWITCH_HINT[draft.type]
 
+  /**
+   * The open sprints for the switch to Kanban, waiting for the lookup if it is still running
+   * (`leftover` is empty until then); null when it failed.
+   */
+  const settledOpenSprints = async (): Promise<Sprint[] | null> => {
+    if (openSprints.isSuccess) return openSprints.data
+    const result = await openSprints.refetch({ cancelRefetch: false })
+    return result.isSuccess ? result.data : null
+  }
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    if (!dirty || update.isPending) return
+    if (!dirty || update.isPending || checkingSprints) return
     if (nameProblem) {
       setNameError(nameProblem)
       return
     }
-    if (patch.type === 'kanban' && leftover.length > 0) {
-      const proceed = await confirm({
-        title: 'Switch to Kanban with open sprints?',
-        description: `${listSprints(leftover)} ${leftover.length === 1 ? 'is' : 'are'} still open. Kanban boards don’t show sprints: their issues stay in ${leftover.length === 1 ? 'it' : 'them'} until you complete or delete ${leftover.length === 1 ? 'it' : 'them'} from the Kanban backlog.`,
-        confirmLabel: 'Switch to Kanban',
-      })
-      if (!proceed) return
+    if (patch.type === 'kanban') {
+      // The fields are locked while the lookup runs, so what is confirmed and saved below (this
+      // render's `patch`) is still what the form shows.
+      if (!openSprints.isSuccess) setCheckingSprints(true)
+      const open = await settledOpenSprints()
+      setCheckingSprints(false)
+      if (open === null || open.length > 0) {
+        const proceed = await confirm(
+          open === null
+            ? {
+                title: 'Switch to Kanban?',
+                description:
+                  'Couldn’t check this project for open sprints. Kanban boards don’t show sprints: issues in an open sprint stay in it until you complete or delete it from the Kanban backlog.',
+                confirmLabel: 'Switch to Kanban',
+              }
+            : {
+                title: 'Switch to Kanban with open sprints?',
+                description: `${listSprints(open)} ${open.length === 1 ? 'is' : 'are'} still open. Kanban boards don’t show sprints: their issues stay in ${open.length === 1 ? 'it' : 'them'} until you complete or delete ${open.length === 1 ? 'it' : 'them'} from the Kanban backlog.`,
+                confirmLabel: 'Switch to Kanban',
+              },
+        )
+        if (!proceed) return
+      }
     }
     update.mutate(patch, {
       onSuccess: () => toast.success('Project details saved'),
@@ -152,16 +188,26 @@ function DetailsForm({ project }: { project: Project }) {
         description="How the project appears across Gene Board."
         footer={
           <>
-            <Button variant="subtle" disabled={!dirty || update.isPending} onClick={() => setDraft(draftOf(project))}>
+            <Button
+              variant="subtle"
+              disabled={!dirty || update.isPending || checkingSprints}
+              onClick={() => setDraft(draftOf(project))}
+            >
               Discard changes
             </Button>
-            <Button type="submit" variant="primary" disabled={!dirty} loading={update.isPending} data-testid="project-details-save">
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={!dirty}
+              loading={update.isPending || checkingSprints}
+              data-testid="project-details-save"
+            >
               Save changes
             </Button>
           </>
         }
       >
-        <div className="flex flex-col gap-5">
+        <fieldset disabled={checkingSprints} className="flex min-w-0 flex-col gap-5">
           <div className="flex items-center gap-3">
             <ProjectAvatar project={{ key: project.key, name: trimmedName || project.name }} size="xl" />
             <div className="min-w-0">
@@ -191,6 +237,7 @@ function DetailsForm({ project }: { project: Project }) {
           <ProjectTypeCards
             value={draft.type}
             onChange={(type) => set('type', type)}
+            disabled={checkingSprints}
             hint={typeHint}
           />
 
@@ -200,6 +247,7 @@ function DetailsForm({ project }: { project: Project }) {
               value={draft.leadId ?? null}
               onChange={(leadId) => set('leadId', leadId)}
               unassignedLabel="No lead"
+              fieldLabel="Project lead"
               data-testid="project-details-lead"
             />
           </Field>
@@ -214,7 +262,7 @@ function DetailsForm({ project }: { project: Project }) {
               onChange={(e) => set('description', e.target.value)}
             />
           </Field>
-        </div>
+        </fieldset>
       </SettingsSection>
     </form>
   )

@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { useBlocker, type Location } from 'react-router'
+import { useCallback, useRef, useState } from 'react'
+import type { Location } from 'react-router'
 import { ISSUE_MODAL_PARAM } from '@/app/ModalsProvider'
-import { DialogPrimitive, useConfirm, useReturnFocus } from '@/components/ui'
+import { DialogPrimitive, useReturnFocus } from '@/components/ui'
 import { isTypingTarget } from '@/lib/hooks'
 import { IssueViewLoader } from './view/IssueViewLoader'
 import { createUnsavedEdits, LOCAL_ESCAPE_SELECTOR } from './view/IssueViewContext'
+import { useConfirmUnload, useDiscardGuard } from './view/useDiscardGuard'
 
 /** Clicking a toast (outside the dialog) must not close it. */
 function isToastEvent(event: Event): boolean {
@@ -33,16 +34,12 @@ function modalIssueOf(location: Location): string {
  * Opening another issue from inside (child, parent, link) swaps the content in place.
  *
  * With an unsaved description or comment draft, every way of leaving the issue — Escape, the
- * overlay, the close button, Back / Forward, opening another issue — asks to discard it first.
+ * overlay, the close button, Back / Forward, opening another issue — asks to discard it first
+ * (reloading or closing the tab gets the browser's prompt).
  */
 export function IssueDetailModal({ issueKey, onClose }: { issueKey: string; onClose: () => void }) {
   const contentRef = useRef<HTMLDivElement>(null)
-  const confirm = useConfirm()
   const [unsavedEdits] = useState(createUnsavedEdits)
-  // Set once leaving is settled (nothing unsaved, or the user chose to discard), so the
-  // resulting navigation isn't blocked a second time.
-  const leaving = useRef(false)
-  const prompting = useRef(false)
   // Closing returns focus to what opened the modal. Opened from the URL, or when its card was
   // re-created (a status change moves it to another column): the issue's card or backlog row.
   const openedKey = useRef(issueKey)
@@ -52,45 +49,17 @@ export function IssueDetailModal({ issueKey, onClose }: { issueKey: string; onCl
     ),
   )
 
-  const confirmDiscard = useCallback(
-    () =>
-      confirm({
-        title: 'Discard unsaved changes?',
-        description: 'Your edits to this issue’s description or comments haven’t been saved.',
-        confirmLabel: 'Discard',
-      }),
-    [confirm],
+  // History navigation (Back, Forward) and in-modal links close or swap the issue too.
+  const confirmLeave = useDiscardGuard(
+    unsavedEdits,
+    issueKey,
+    (current, next) => modalIssueOf(current) !== modalIssueOf(next),
   )
+  useConfirmUnload(unsavedEdits)
 
   const requestClose = useCallback(async () => {
-    if (unsavedEdits.any() && !(await confirmDiscard())) return
-    leaving.current = true
-    onClose()
-  }, [unsavedEdits, confirmDiscard, onClose])
-
-  // History navigation (Back, Forward) and in-modal links close or swap the issue too.
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      !leaving.current && unsavedEdits.any() && modalIssueOf(currentLocation) !== modalIssueOf(nextLocation),
-  )
-  useEffect(() => {
-    if (blocker.state !== 'blocked' || prompting.current) return
-    prompting.current = true
-    void confirmDiscard().then((discard) => {
-      prompting.current = false
-      if (discard) {
-        leaving.current = true
-        blocker.proceed()
-      } else {
-        blocker.reset()
-      }
-    })
-  }, [blocker, confirmDiscard])
-
-  // Another issue in the modal starts with nothing unsaved.
-  useEffect(() => {
-    leaving.current = false
-  }, [issueKey])
+    if (await confirmLeave()) onClose()
+  }, [confirmLeave, onClose])
 
   return (
     <DialogPrimitive.Root open onOpenChange={(open) => !open && void requestClose()}>

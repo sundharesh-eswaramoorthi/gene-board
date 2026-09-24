@@ -3,6 +3,7 @@ import { useId, useState, type MouseEvent } from 'react'
 import type { IssueDetail } from '@/api/types'
 import { Button, ChangedElsewhereNotice, useConfirm, useEditDraft } from '@/components/ui'
 import { Markdown } from '@/components/ui/Markdown'
+import { useEditorFocusReturn } from '@/lib/hooks'
 import { MarkdownEditor } from '../shared/MarkdownEditor'
 import type { SaveIssue } from '../shared/useIssueSave'
 import { MAX_DESCRIPTION_LENGTH } from '../shared/limits'
@@ -24,6 +25,12 @@ export function IssueDescription({ issue, save }: { issue: IssueDetail; save: Sa
   const hasDescription = description.trim() !== ''
   const { editing, draft, setDraft, start, stop, dirty, changedElsewhere } = useEditDraft(description)
   useReportUnsaved(dirty)
+  // Closing the editor puts focus back on "Edit" (or "Add a description…").
+  const { buttonRef, editorRef, returnFocus } = useEditorFocusReturn(editing)
+  const close = (options?: { ifFocusInside?: boolean }) => {
+    returnFocus(options)
+    stop()
+  }
 
   const cancelWithConfirm = async () => {
     if (dirty) {
@@ -34,19 +41,19 @@ export function IssueDescription({ issue, save }: { issue: IssueDetail; save: Sa
       })
       if (!discard) return
     }
-    stop()
+    close()
   }
 
   const submit = async () => {
     if (saving) return
     if (!dirty) {
-      stop()
+      close()
       return
     }
     setSaving(true)
     const ok = await save({ description: draft.trim() })
     setSaving(false)
-    if (ok) stop()
+    if (ok) close({ ifFocusInside: true })
   }
 
   // Clicking the rendered text edits it, except on links/controls or after selecting text.
@@ -60,14 +67,14 @@ export function IssueDescription({ issue, save }: { issue: IssueDetail; save: Sa
   let body
   if (editing) {
     body = (
-      <div data-local-escape>
+      <div ref={editorRef} data-local-escape>
         <MarkdownEditor
           value={draft}
           onChange={setDraft}
           autoFocus
           minRows={6}
           maxLength={MAX_DESCRIPTION_LENGTH}
-          disabled={saving}
+          saving={saving}
           placeholder="Add a description… Markdown is supported: **bold**, _italic_, lists, `code`, tables."
           aria-label="Description"
           onSubmit={() => void submit()}
@@ -85,7 +92,7 @@ export function IssueDescription({ issue, save }: { issue: IssueDetail; save: Sa
                 <Button variant="primary" size="sm" loading={saving} onClick={() => void submit()}>
                   Save
                 </Button>
-                <Button variant="subtle" size="sm" disabled={saving} onClick={stop}>
+                <Button variant="subtle" size="sm" disabled={saving} onClick={() => close()}>
                   Cancel
                 </Button>
               </div>
@@ -111,6 +118,7 @@ export function IssueDescription({ issue, save }: { issue: IssueDetail; save: Sa
   } else if (canEdit) {
     body = (
       <button
+        ref={buttonRef}
         type="button"
         onClick={start}
         className="-mx-2 w-[calc(100%+1rem)] rounded-sm px-2 py-2 text-left text-sm text-fg-subtle transition-colors hover:bg-surface-hover"
@@ -129,7 +137,14 @@ export function IssueDescription({ issue, save }: { issue: IssueDetail; save: Sa
           Description
         </h3>
         {canEdit && !editing && hasDescription && (
-          <Button variant="subtle" size="sm" icon={<Pencil />} onClick={start} aria-label="Edit description">
+          <Button
+            ref={buttonRef}
+            variant="subtle"
+            size="sm"
+            icon={<Pencil />}
+            onClick={start}
+            aria-label="Edit description"
+          >
             Edit
           </Button>
         )}

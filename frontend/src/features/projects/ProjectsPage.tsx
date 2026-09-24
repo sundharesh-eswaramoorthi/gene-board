@@ -89,7 +89,7 @@ export function ProjectsPage() {
         )}
       </PageHeader>
 
-      {projects.isError ? (
+      {projects.isLoadingError ? (
         <div className="rounded-lg border border-border">
           <ErrorState error={projects.error} title="Couldn’t load projects" onRetry={() => void projects.refetch()} />
         </div>

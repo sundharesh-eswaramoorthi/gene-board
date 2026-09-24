@@ -69,7 +69,7 @@ function EpicsView({ project }: { project: Project }) {
   let content
   if (epics.isPending) {
     content = <EpicsSkeleton />
-  } else if (epics.isError) {
+  } else if (epics.isLoadingError) {
     content = (
       <div className="rounded-lg border border-border bg-surface">
         <ErrorState error={epics.error} title="Couldn’t load epics" onRetry={() => void epics.refetch()} />

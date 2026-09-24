@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import type { Activity } from '@/api/types'
 import { Tooltip } from '@/components/ui/Tooltip'
-import { describeActivity } from '@/lib/activity'
+import { actorName, describeActivity, splitIsolates } from '@/lib/activity'
 import { cn } from '@/lib/cn'
 import { formatDateTime, formatRelative } from '@/lib/dates'
 import { truncate } from '@/lib/format'
@@ -35,6 +35,17 @@ function linkKeys(text: string, key: string | null, deleted: boolean): ReactNode
 }
 
 /**
+ * The sentence with every user-entered value in a `<bdi>`: a right-to-left name or a stray
+ * direction override in a value can't reorder the rest of the line.
+ */
+function renderSentence(sentence: string, key: string | null, deleted: boolean): ReactNode {
+  return splitIsolates(sentence).map((part, i) => {
+    const text = linkKeys(part, key, deleted)
+    return i % 2 === 1 ? <bdi key={i}>{text}</bdi> : <Fragment key={i}>{text}</Fragment>
+  })
+}
+
+/**
  * One activity row: avatar, "**Alex** changed Status from To Do to In Progress", relative time
  * (full timestamp on hover) and, for comments, a short excerpt. Issue keys are links that open
  * the issue modal.
@@ -49,8 +60,8 @@ export function ActivityItem({ activity, withIssue = false, showProject = false,
       {!hideAvatar && <UserAvatar user={activity.actor} size="lg" emptyLabel="Deleted user" />}
       <div className="min-w-0 flex-1">
         <p className="text-sm leading-5 text-fg">
-          <span className="font-semibold">{activity.actor?.name ?? 'Someone'}</span>{' '}
-          <span className="text-fg-muted">{linkKeys(sentence, activity.issueKey, deleted)}</span>
+          <bdi className="font-semibold">{actorName(activity)}</bdi>{' '}
+          <span className="text-fg-muted">{renderSentence(sentence, activity.issueKey, deleted)}</span>
         </p>
         {excerpt && (
           <p className="mt-1 line-clamp-2 border-l-2 border-border-strong pl-2 text-sm text-fg-muted">{excerpt}</p>

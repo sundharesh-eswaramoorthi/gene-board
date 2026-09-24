@@ -10,6 +10,8 @@
 //     anything else is treated as an internal error by the HTTP layer.
 //   - Permissions: resolve the project/issue with projectByKey / projectByID / issueByKey /
 //     issueByID and a minimum Role. Non-members get 404, insufficient roles get 403.
+//     Writes that serialise on the project row lock take it with lockProjectAs, which
+//     re-checks the role and re-reads the project under the lock.
 //   - Mutations run inside s.inTx. Activity rows are written in the same transaction via
 //     txn.logActivity, and realtime events are queued with txn.publish; the queue is
 //     flushed to the hub only after a successful commit.

@@ -1,6 +1,7 @@
 import type { CreateIssueVariables } from '@/api/issues'
 import type { ID, IssueType, Priority, UserSummary } from '@/api/types'
 import type { CreateIssueDefaults } from '@/app/ModalsProvider'
+import { charCount } from '@/lib/chars'
 import { allowedParentTypes } from '@/lib/issueMeta'
 import { normalizeKey, projectKeyOf } from '@/lib/projectKey'
 import { fieldLabel } from '../shared/errors'
@@ -132,7 +133,7 @@ export function validateCreateForm(values: CreateFormValues): CreateErrors {
   if (!values.projectKey) errors.project = 'Select a project'
   const summary = values.summary.trim()
   if (!summary) errors.summary = 'Summary is required'
-  else if (summary.length > MAX_SUMMARY_LENGTH) errors.summary = `Summary can be at most ${MAX_SUMMARY_LENGTH} characters`
+  else if (charCount(summary) > MAX_SUMMARY_LENGTH) errors.summary = `Summary can be at most ${MAX_SUMMARY_LENGTH} characters`
   const parentTypes = allowedParentTypes(values.type)
   if (values.type === 'subtask' && !values.parent) {
     errors.parent = 'A subtask needs a parent issue'

@@ -106,14 +106,19 @@ func (s *Service) sprintByID(ctx context.Context, q *db.Queries, userID, sprintI
 }
 
 // lockSprint resolves a sprint for a lifecycle change (member role): it locks the project
-// row, then re-reads the sprint with a row lock held for the rest of the transaction.
+// row and re-reads the project and the caller's role under it (lockProjectAs), then
+// re-reads the sprint with a row lock held for the rest of the transaction.
 func (s *Service) lockSprint(ctx context.Context, t *txn, userID, sprintID int64) (sprintAccess, error) {
 	acc, err := s.sprintByID(ctx, t.q, userID, sprintID, RoleMember)
 	if err != nil {
 		return sprintAccess{}, err
 	}
-	if err := t.q.LockProject(ctx, acc.project.ID); err != nil {
-		return sprintAccess{}, fmt.Errorf("lock project: %w", err)
+	pacc, err := s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleMember)
+	if httpx.IsCode(err, httpx.CodeNotFound) {
+		return sprintAccess{}, errSprintNotFound
+	}
+	if err != nil {
+		return sprintAccess{}, err
 	}
 	sp, err := t.q.LockSprint(ctx, sprintID)
 	if isNoRows(err) { // deleted concurrently
@@ -122,8 +127,7 @@ func (s *Service) lockSprint(ctx context.Context, t *txn, userID, sprintID int64
 	if err != nil {
 		return sprintAccess{}, fmt.Errorf("lock sprint: %w", err)
 	}
-	acc.sprint = sp
-	return acc, nil
+	return sprintAccess{sprint: sp, project: pacc.project, role: pacc.role}, nil
 }
 
 // ParseSprintStates parses the optional state filter of GET /projects/{key}/sprints
@@ -171,7 +175,7 @@ func (s *Service) GetSprint(ctx context.Context, userID, sprintID int64) (dto.Sp
 
 // CreateSprint creates a planned sprint (member role; Scrum projects only).
 func (s *Service) CreateSprint(ctx context.Context, userID int64, projectKey string, in CreateSprintInput) (dto.Sprint, error) {
-	name := strings.TrimSpace(in.Name)
+	name := cleanName(in.Name)
 	goal := strings.TrimSpace(in.Goal)
 	var fe httpx.FieldErrors
 	checkLength(&fe, "name", name, 0, maxSprintName)
@@ -187,8 +191,9 @@ func (s *Service) CreateSprint(ctx context.Context, userID int64, projectKey str
 		if err != nil {
 			return err
 		}
-		if err := t.q.LockProject(ctx, acc.project.ID); err != nil { // serialises default naming
-			return fmt.Errorf("lock project: %w", err)
+		// The lock serialises default naming; the re-read type decides whether sprints apply.
+		if acc, err = s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleMember); err != nil {
+			return err
 		}
 		sp, err := t.createSprint(ctx, userID, acc.project, name, goal, in.StartDate, in.EndDate)
 		if err != nil {
@@ -200,14 +205,15 @@ func (s *Service) CreateSprint(ctx context.Context, userID int64, projectKey str
 	return out, err
 }
 
-// createSprint inserts a planned sprint into p, whose row the caller has locked. An empty
-// name gets the default "<KEY> Sprint <n>". Logs sprint.created and queues a realtime
-// event.
+// createSprint inserts a planned sprint into p, whose row the caller has locked and re-read
+// (lockProjectAs), so its type is current. A name with nothing visible (empty, or only
+// combining marks or emoji tags, which cleanName keeps) gets the default "<KEY> Sprint <n>".
+// Logs sprint.created and queues a realtime event.
 func (t *txn) createSprint(ctx context.Context, actorID int64, p db.Project, name, goal string, start, end *dto.Date) (db.Sprint, error) {
 	if p.Type == dto.ProjectTypeKanban {
 		return db.Sprint{}, errKanbanSprints
 	}
-	if name == "" {
+	if !hasVisible(name) {
 		var err error
 		if name, err = defaultSprintName(ctx, t.q, p); err != nil {
 			return db.Sprint{}, err
@@ -269,7 +275,7 @@ func (s *Service) UpdateSprint(ctx context.Context, userID, sprintID int64, in U
 			if in.Name.Null {
 				fe.Add("name", "must not be null")
 			} else {
-				name = strings.TrimSpace(in.Name.Value)
+				name = cleanName(in.Name.Value)
 				checkLength(&fe, "name", name, 1, maxSprintName)
 			}
 		}
@@ -375,7 +381,7 @@ func (s *Service) StartSprint(ctx context.Context, userID, sprintID int64, in St
 			if in.Name.Null {
 				fe.Add("name", "must not be null")
 			} else {
-				name = strings.TrimSpace(in.Name.Value)
+				name = cleanName(in.Name.Value)
 				checkLength(&fe, "name", name, 1, maxSprintName)
 			}
 		}

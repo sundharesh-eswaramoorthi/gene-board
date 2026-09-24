@@ -23,6 +23,7 @@ export interface ProjectChoice {
   /** Select a project explicitly. */
   choose: (projectKey: string) => void
   isLoading: boolean
+  /** Why the first load failed; a failed background refetch keeps the cached list usable. */
   error: ApiError | null
   retry: () => void
 }
@@ -63,7 +64,7 @@ export function useProjectChoice(defaults: CreateIssueDefaults): ProjectChoice {
     creatable,
     choose: setChosenKey,
     isLoading: projects.isPending,
-    error: projects.isError ? projects.error : null,
+    error: projects.isLoadingError ? projects.error : null,
     retry: () => void refetch(),
   }
 }

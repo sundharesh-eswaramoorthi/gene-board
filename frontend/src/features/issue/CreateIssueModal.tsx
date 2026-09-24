@@ -95,7 +95,9 @@ export function CreateIssueModal({
   // The inputs hold text the browser can't parse (their value then reads as '').
   const [storyPointsUnparsable, setStoryPointsUnparsable] = useState(false)
   const [dueDateUnparsable, setDueDateUnparsable] = useState(false)
-  const [scoped, setScoped] = useState<ProjectScopedFields>(() => scopedFieldsFromDefaults(defaults))
+  const [initialScoped] = useState(() => scopedFieldsFromDefaults(defaults))
+  const [scoped, setScoped] = useState<ProjectScopedFields>(initialScoped)
+  const [projectPicked, setProjectPicked] = useState(false)
   const [createAnother, setCreateAnother] = useState(false)
   const [createdCount, setCreatedCount] = useState(0)
   const [submitted, setSubmitted] = useState(false)
@@ -163,6 +165,7 @@ export function CreateIssueModal({
   const changeProject = (key: string) => {
     if (key === projectKey) return
     projects.choose(key)
+    setProjectPicked(true)
     setScoped(emptyScopedFields(key))
     setServerErrors({})
   }
@@ -178,8 +181,26 @@ export function CreateIssueModal({
     }
   }
 
+  // Anything the user changed from the starting values is unsaved input. After a create, "Create
+  // another" deliberately carries every field but the summary over, so only a summary counts.
+  const startScoped = initialScoped.projectKey === projectKey ? initialScoped : emptyScopedFields(projectKey)
+  const fieldsChanged =
+    projectPicked ||
+    typePickedByUser ||
+    description.trim() !== '' ||
+    priority !== 'medium' ||
+    storyPoints !== '' ||
+    storyPointsUnparsable ||
+    dueDate !== '' ||
+    dueDateUnparsable ||
+    fields.assignee?.id !== startScoped.assignee?.id ||
+    fields.parent?.id !== startScoped.parent?.id ||
+    fields.sprintId !== startScoped.sprintId ||
+    fields.labelIds.join() !== startScoped.labelIds.join()
   const isDirty =
-    summary.trim() !== (defaults.summary ?? '').trim() || (createdCount === 0 && description.trim() !== '')
+    createdCount === 0
+      ? summary.trim() !== (defaults.summary ?? '').trim() || fieldsChanged
+      : summary.trim() !== ''
 
   const requestClose = async () => {
     if (create.isPending) return
@@ -338,6 +359,7 @@ export function CreateIssueModal({
           <UserPicker
             projectKey={projectKey ?? ''}
             value={fields.assignee}
+            fieldLabel="Assignee"
             disabled={!projectKey}
             onChange={(userId, picked) => {
               updateScoped({ assignee: userId == null ? null : (picked ?? { id: userId, name: 'Unknown user', email: '' }) })
@@ -379,6 +401,7 @@ export function CreateIssueModal({
               projectKey={projectKey ?? ''}
               childType={type}
               value={parentValue}
+              fieldLabel={parentLabel}
               disabled={!projectKey}
               onChange={(picked) => {
                 updateScoped({
@@ -472,7 +495,7 @@ export function CreateIssueModal({
               <Kbd>Enter</Kbd>
             </span>
           )}
-          <Button variant="subtle" onClick={onClose} disabled={create.isPending}>
+          <Button variant="subtle" onClick={() => void requestClose()} disabled={create.isPending}>
             Cancel
           </Button>
           <Button

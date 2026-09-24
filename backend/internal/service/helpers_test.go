@@ -90,9 +90,6 @@ func TestSmallHelpers(t *testing.T) {
 			t.Errorf("validEmail(%q) != %v", email, ok)
 		}
 	}
-	if truncateRunes("héllo", 2) != "hé" || truncateRunes("hi", 5) != "hi" {
-		t.Fatal("truncateRunes")
-	}
 	if got := dedupeIDs([]int64{3, 1, 3, 2}); !slices.Equal(got, []int64{1, 2, 3}) {
 		t.Fatalf("dedupeIDs = %v", got)
 	}

@@ -8,9 +8,13 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 
-# Access log without query strings ($uri, not $request): the project websocket authenticates
-# with ?token=<jwt>, which must not end up in logs.
-log_format geneboard '$remote_addr - [$time_local] "$request_method $uri $server_protocol" '
+# Access log without query strings: the project websocket authenticates with ?token=<jwt>,
+# which must not end up in logs. $request_path is the requested path ($request_uri up to the
+# "?"); $uri would log every client-side route as /index.html (try_files below rewrites it).
+map $request_uri $request_path {
+    "~^(?<requested_path>[^?]*)" $requested_path;
+}
+log_format geneboard '$remote_addr - [$time_local] "$request_method $request_path $server_protocol" '
                      '$status $body_bytes_sent $request_time "$http_referer" "$http_user_agent"';
 
 server {
@@ -54,6 +58,17 @@ server {
         proxy_read_timeout 1h;
         proxy_send_timeout 1h;
         client_max_body_size 2m;
+
+        # The websockets, with the settings above. The access log leaves out their ?token=, but
+        # the error log prints a failed request's full URL (request line and upstream), and
+        # open boards retry every few seconds while the API is down or restarting: log only
+        # critical errors here. API outages still show up in the error log through the REST
+        # requests. (set and proxy_pass are not inherited, hence the repeat.)
+        location ~ ^/api/projects/[^/]+/ws$ {
+            error_log /var/log/nginx/error.log crit;
+            set $api_upstream http://${API_UPSTREAM};
+            proxy_pass $api_upstream;
+        }
     }
 
     # Content-hashed bundles: cache for a year.

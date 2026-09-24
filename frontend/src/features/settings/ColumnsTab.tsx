@@ -107,7 +107,7 @@ export function ColumnsTab({ project, isAdmin }: ColumnsTabProps) {
       >
         {statuses.isPending ? (
           <SkeletonRows rows={4} className="border-t border-border" />
-        ) : statuses.isError ? (
+        ) : statuses.isLoadingError ? (
           <ErrorState size="sm" error={statuses.error} title="Couldn’t load columns" onRetry={() => void statuses.refetch()} />
         ) : columns.length === 0 ? (
           <EmptyState size="sm" icon={<Columns3 />} title="No columns" />

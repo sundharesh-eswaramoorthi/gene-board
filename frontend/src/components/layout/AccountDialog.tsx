@@ -8,6 +8,7 @@ import { Dialog } from '@/components/ui/Dialog'
 import { Field } from '@/components/ui/Field'
 import { Input } from '@/components/ui/Input'
 import { toast } from '@/components/ui/toast'
+import { charCount } from '@/lib/chars'
 import { errorMessage, fieldErrors } from '@/lib/errors'
 
 /** Account settings: display name and password change (PATCH /auth/me). Mount it only while open so it starts fresh. */
@@ -26,7 +27,7 @@ export function AccountDialog({ open, onOpenChange }: { open: boolean; onOpenCha
     const input: UpdateMeInput = {}
     const trimmed = name.trim()
     if (!trimmed) next.name = 'Name is required'
-    else if (trimmed.length > 100) next.name = 'Name must be at most 100 characters'
+    else if (charCount(trimmed) > 100) next.name = 'Name must be at most 100 characters'
     else if (trimmed !== user?.name) input.name = trimmed
     if (currentPassword || newPassword || confirmPassword) {
       if (!currentPassword) next.currentPassword = 'Enter your current password'

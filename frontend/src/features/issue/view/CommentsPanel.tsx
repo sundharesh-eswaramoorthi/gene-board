@@ -1,6 +1,6 @@
 import { keepPreviousData } from '@tanstack/react-query'
 import { MessageSquare } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { useAddComment, useComments, useDeleteComment, useUpdateComment } from '@/api/comments'
 import type { Comment, IssueDetail } from '@/api/types'
 import { useAuth } from '@/auth/AuthProvider'
@@ -9,6 +9,7 @@ import { Button, EmptyState, ErrorState, Skeleton, SkeletonText, Tooltip, contro
 import { Markdown } from '@/components/ui/Markdown'
 import { cn } from '@/lib/cn'
 import { formatDateTime, formatRelative } from '@/lib/dates'
+import { useEditorFocusReturn } from '@/lib/hooks'
 import { toastSaveError } from '../shared/errors'
 import { MarkdownEditor } from '../shared/MarkdownEditor'
 import { useIssueView, useReportUnsaved } from './IssueViewContext'
@@ -96,6 +97,12 @@ function CommentItem({
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
   useReportUnsaved(editing && draft.trim() !== comment.body.trim())
+  // Closing the editor puts focus back on the comment's Edit button.
+  const { buttonRef, editorRef, returnFocus } = useEditorFocusReturn(editing)
+  const stopEditing = (options?: { ifFocusInside?: boolean }) => {
+    returnFocus(options)
+    setEditing(false)
+  }
 
   const startEdit = () => {
     setDraft(comment.body)
@@ -106,12 +113,12 @@ function CommentItem({
     const body = draft.trim()
     if (!body || update.isPending) return
     if (body === comment.body.trim()) {
-      setEditing(false)
+      stopEditing()
       return
     }
     try {
       await update.mutateAsync({ id: comment.id, body })
-      setEditing(false)
+      stopEditing({ ifFocusInside: true })
     } catch (err) {
       toastSaveError(err, 'Couldn’t update the comment')
     }
@@ -126,7 +133,7 @@ function CommentItem({
       })
       if (!discard) return
     }
-    setEditing(false)
+    stopEditing()
   }
 
   const onDelete = () =>
@@ -159,14 +166,14 @@ function CommentItem({
           )}
         </div>
         {editing ? (
-          <div data-local-escape className="mt-1.5">
+          <div ref={editorRef} data-local-escape className="mt-1.5">
             <MarkdownEditor
               value={draft}
               onChange={setDraft}
               autoFocus
               minRows={3}
               maxLength={MAX_COMMENT_LENGTH}
-              disabled={update.isPending}
+              saving={update.isPending}
               aria-label="Edit comment"
               onSubmit={() => void save()}
               submitHint="to save"
@@ -176,7 +183,7 @@ function CommentItem({
                   <Button variant="primary" size="sm" loading={update.isPending} disabled={!draft.trim()} onClick={() => void save()}>
                     Save
                   </Button>
-                  <Button variant="subtle" size="sm" disabled={update.isPending} onClick={() => setEditing(false)}>
+                  <Button variant="subtle" size="sm" disabled={update.isPending} onClick={() => stopEditing()}>
                     Cancel
                   </Button>
                 </div>
@@ -189,7 +196,12 @@ function CommentItem({
             {(canModify || canDelete) && (
               <div className="mt-1 flex items-center gap-3 text-xs">
                 {canModify && (
-                  <button type="button" onClick={startEdit} className="rounded-sm font-medium text-fg-muted hover:text-fg hover:underline">
+                  <button
+                    ref={buttonRef}
+                    type="button"
+                    onClick={startEdit}
+                    className="rounded-sm font-medium text-fg-muted hover:text-fg hover:underline"
+                  >
                     Edit
                   </button>
                 )}
@@ -220,16 +232,21 @@ function CommentComposer({ issueKey }: { issueKey: string }) {
   const add = useAddComment(issueKey)
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState('')
-  const containerRef = useRef<HTMLDivElement>(null)
   useReportUnsaved(open && draft.trim() !== '')
+  // Closing the editor (posted, Cancel, Escape when empty) puts focus back on "Add a comment…".
+  const { buttonRef, editorRef, returnFocus } = useEditorFocusReturn(open)
+  const close = (options?: { ifFocusInside?: boolean }) => {
+    returnFocus(options)
+    setDraft('')
+    setOpen(false)
+  }
 
   const submit = async () => {
     const body = draft.trim()
     if (!body || add.isPending) return
     try {
       await add.mutateAsync(body)
-      setDraft('')
-      setOpen(false)
+      close({ ifFocusInside: true })
     } catch (err) {
       toastSaveError(err, 'Couldn’t add the comment')
     }
@@ -237,17 +254,17 @@ function CommentComposer({ issueKey }: { issueKey: string }) {
 
   const onEscape = () => {
     if (!draft.trim()) {
-      setOpen(false)
+      close()
       return
     }
     const active = document.activeElement
-    if (active instanceof HTMLElement && containerRef.current?.contains(active)) active.blur()
+    if (active instanceof HTMLElement && editorRef.current?.contains(active)) active.blur()
   }
 
   return (
     <div className="flex gap-3">
       <UserAvatar user={me} size="lg" tooltip={false} />
-      <div ref={containerRef} className="min-w-0 flex-1" data-local-escape={open || undefined}>
+      <div ref={editorRef} className="min-w-0 flex-1" data-local-escape={open || undefined}>
         {open ? (
           <MarkdownEditor
             value={draft}
@@ -255,7 +272,7 @@ function CommentComposer({ issueKey }: { issueKey: string }) {
             autoFocus
             minRows={3}
             maxLength={MAX_COMMENT_LENGTH}
-            disabled={add.isPending}
+            saving={add.isPending}
             placeholder="Add a comment… (Markdown supported)"
             aria-label="Add a comment"
             onSubmit={() => void submit()}
@@ -270,10 +287,7 @@ function CommentComposer({ issueKey }: { issueKey: string }) {
                   variant="subtle"
                   size="sm"
                   disabled={add.isPending}
-                  onClick={() => {
-                    setDraft('')
-                    setOpen(false)
-                  }}
+                  onClick={() => close()}
                 >
                   Cancel
                 </Button>
@@ -282,6 +296,7 @@ function CommentComposer({ issueKey }: { issueKey: string }) {
           />
         ) : (
           <button
+            ref={buttonRef}
             type="button"
             onClick={() => setOpen(true)}
             className={cn(controlClasses, 'flex h-9 items-center px-3 text-left text-sm text-fg-subtle')}

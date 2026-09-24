@@ -50,6 +50,10 @@ function IssueSearch({ project }: { project: Project | null }) {
 
   const hasFilters = activeFilterCount(filters) > 0
   const showSkeleton = results.isPending || (results.isPlaceholderData && results.items.length === 0)
+  // A failed refresh keeps the last rows (marked out of date), except after a 404: the searched
+  // project is gone, or the viewer was removed from it, so its rows go too.
+  const loadError = results.error && (results.items.length === 0 || results.error.status === 404) ? results.error : null
+  const refreshError = loadError ? null : results.error
   const createIssue = project && canEdit ? () => openCreateIssue({ projectKey: project.key }) : undefined
 
   return (
@@ -78,18 +82,18 @@ function IssueSearch({ project }: { project: Project | null }) {
         <IssueFilterBar filters={filters} onChange={update} onClear={clear} project={project} />
       </PageHeader>
 
-      {results.error && results.items.length === 0 ? (
-        <div className="rounded-lg border border-border">
+      {loadError ? (
+        <div className="rounded-lg border border-border" data-testid="issues-error">
           <EmptyState
             icon={<AlertTriangle className="text-danger" />}
             title="Couldn’t load issues"
-            description={errorMessage(results.error)}
+            description={errorMessage(loadError)}
             action={
               <>
                 <Button size="sm" icon={<RotateCw />} onClick={results.refetch}>
                   Try again
                 </Button>
-                {results.error.status === 400 && hasFilters && (
+                {((loadError.status === 400 && hasFilters) || (loadError.status === 404 && filters.project != null)) && (
                   <Button size="sm" variant="subtle" icon={<FilterX />} onClick={clear}>
                     Clear filters
                   </Button>
@@ -139,6 +143,22 @@ function IssueSearch({ project }: { project: Project | null }) {
         </div>
       ) : (
         <>
+          {refreshError && (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-md border border-danger/40 bg-danger-subtle px-3 py-2 text-sm"
+              data-testid="issues-refresh-error"
+            >
+              <AlertTriangle className="size-4 shrink-0 text-danger" aria-hidden />
+              <p className="min-w-0 flex-1">
+                <span className="font-medium text-fg">Couldn’t refresh issues, so this list may be out of date.</span>{' '}
+                <span className="text-fg-muted">{errorMessage(refreshError)}</span>
+              </p>
+              <Button size="sm" icon={<RotateCw />} onClick={results.refetch}>
+                Try again
+              </Button>
+            </div>
+          )}
           <div className="flex min-h-5 items-center gap-2 text-sm text-fg-muted">
             {!showSkeleton && (
               <span className="tabular-nums" data-testid="issues-count">

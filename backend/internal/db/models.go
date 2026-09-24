@@ -19,6 +19,7 @@ type Activity struct {
 	OldValue  *string   `db:"old_value"`
 	NewValue  *string   `db:"new_value"`
 	CreatedAt time.Time `db:"created_at"`
+	CommentID *int64    `db:"comment_id"`
 }
 
 type Comment struct {

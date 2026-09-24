@@ -49,6 +49,22 @@ func Run(ctx context.Context, svc *service.Service, pool *pgxpool.Pool, logger *
 	return nil
 }
 
+// RunIfEmpty seeds the demo data only into a database without users (`server seed
+// --if-empty`, which `make up` runs on every start): a new database gets the demo data, and
+// one in real use is left alone — Run would add the demo accounts to it, and fail halfway
+// if one of its projects already uses the key GB or OPS.
+func RunIfEmpty(ctx context.Context, svc *service.Service, pool *pgxpool.Pool, logger *slog.Logger) error {
+	var hasUsers bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM users)`).Scan(&hasUsers); err != nil {
+		return fmt.Errorf("seed: check for users: %w", err)
+	}
+	if hasUsers {
+		logger.Info("the database already has users; not loading the demo data")
+		return nil
+	}
+	return Run(ctx, svc, pool, logger)
+}
+
 // seeder carries the seed's state. Actions record the first error in err and become
 // no-ops afterwards, which keeps the timeline in demo.go free of error plumbing.
 type seeder struct {
@@ -326,7 +342,7 @@ func (sd *seeder) create(actor, projectKey string, specs ...issueSpec) {
 			in.ParentID = ptr(sd.issue(sp.parent).ID)
 		}
 		if sp.sprint != "" {
-			in.SprintID = ptr(sd.sprint(sp.sprint).ID)
+			in.SprintID = httpx.Some(sd.sprint(sp.sprint).ID)
 		}
 		if sp.status != "" {
 			in.StatusID = ptr(sd.status(projectKey, sp.status))

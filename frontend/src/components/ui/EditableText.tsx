@@ -1,5 +1,6 @@
 import { TriangleAlert } from 'lucide-react'
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { charLimitProps } from '@/lib/chars'
 import { cn } from '@/lib/cn'
 import { errorMessage } from '@/lib/errors'
 import { toast } from './toast'
@@ -15,6 +16,7 @@ export interface EditableTextProps {
   disabled?: boolean
   /** Return an error message to block saving (e.g. empty). Default: non-empty required. */
   validate?: (value: string) => string | null
+  /** Longest value in characters, as the API counts them (an emoji is one). */
   maxLength?: number
   /** Classes for the display text and the input (share typography, e.g. `text-xl font-semibold`). */
   className?: string
@@ -204,9 +206,8 @@ export function EditableText({
           aria-label={label}
           aria-describedby={changedElsewhere ? noticeId : undefined}
           value={draft}
-          maxLength={maxLength}
           disabled={saving}
-          onChange={(e) => setDraft(e.target.value)}
+          {...charLimitProps<HTMLInputElement>(maxLength, draft, (e) => setDraft(e.target.value))}
           onKeyDown={onKeyDown}
           onBlur={() => {
             if (!skipBlur.current) void commit()

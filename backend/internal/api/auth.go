@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strings"
 
 	"geneboard/internal/httpx"
 	"geneboard/internal/service"
@@ -35,7 +34,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) error {
 	if err := httpx.DecodeJSON(w, r, &in); err != nil {
 		return err
 	}
-	account := strings.ToLower(strings.TrimSpace(in.Email))
+	account := service.NormalizeEmail(in.Email) // every spelling of one account shares its budget
 	if err := h.throttle.allowAccount(w, account); err != nil {
 		return err
 	}

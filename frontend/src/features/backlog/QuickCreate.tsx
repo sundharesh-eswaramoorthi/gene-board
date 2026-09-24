@@ -5,6 +5,7 @@ import type { ID, IssueType } from '@/api/types'
 import { useCreateIssueModal } from '@/app/ModalsProvider'
 import { EpicChip, TypeSelect } from '@/components/issue'
 import { IconButton, Kbd, Spinner, toastError } from '@/components/ui'
+import { charLimitProps } from '@/lib/chars'
 import { useLocalStorageState } from '@/lib/hooks'
 import { STANDARD_ISSUE_TYPES } from '@/lib/issueMeta'
 import type { QuickCreateParent } from './BacklogContext'
@@ -115,9 +116,8 @@ export function QuickCreate({ projectKey, containerId, sprintId, parent }: Quick
         ref={inputRef}
         autoFocus
         value={summary}
-        onChange={(e) => setSummary(e.target.value)}
+        {...charLimitProps<HTMLInputElement>(SUMMARY_MAX, summary, (e) => setSummary(e.target.value))}
         onKeyDown={onKeyDown}
-        maxLength={SUMMARY_MAX}
         placeholder="What needs to be done?"
         aria-label="Summary"
         data-testid={`backlog-quick-create-input-${containerId}`}

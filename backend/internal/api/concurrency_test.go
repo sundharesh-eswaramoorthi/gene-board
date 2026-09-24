@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,8 +17,9 @@ import (
 // TestConcurrentIssueWritesDoNotDeadlock hammers a few issues with every kind of write at
 // once. Row locks are FOR NO KEY UPDATE, so writers holding an issue lock can still insert
 // activity rows, comments and links referencing the project or issue while other requests
-// hold the project lock (moves, creates). Every request must succeed; a deadlock would
-// surface as a 500.
+// hold the project lock (moves, creates). Every request must succeed, except that linking
+// the same pair twice is a 409. A deadlock (or serialization failure) would surface as a
+// 409 conflict too, so only the link requests may answer 409.
 func TestConcurrentIssueWritesDoNotDeadlock(t *testing.T) {
 	e := newTestEnv(t)
 	u := e.createUser("Owner")
@@ -32,13 +34,17 @@ func TestConcurrentIssueWritesDoNotDeadlock(t *testing.T) {
 		e.newIssue(u, "GB", "subtask", "Sub", map[string]any{"parentId": is.ID})
 	}
 
+	type result struct {
+		link bool
+		res  *testResponse
+	}
 	var wg sync.WaitGroup
-	results := make(chan *testResponse, 256)
+	results := make(chan result, 256)
 	run := func(method, path string, body any) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results <- e.do(method, path, u.Token, body)
+			results <- result{strings.HasSuffix(path, "/links"), e.do(method, path, u.Token, body)}
 		}()
 	}
 	for round := range 6 {
@@ -54,10 +60,10 @@ func TestConcurrentIssueWritesDoNotDeadlock(t *testing.T) {
 	}
 	wg.Wait()
 	close(results)
-	for res := range results {
-		// Links may legitimately conflict (409) when the same pair is linked twice.
-		if res.Status >= 500 || (res.Status >= 400 && res.Status != http.StatusConflict) {
-			t.Fatalf("unexpected %d: %s", res.Status, res.Body)
+	for r := range results {
+		// Links legitimately conflict (409) when the same pair is linked twice.
+		if r.res.Status >= 300 && !(r.link && r.res.Status == http.StatusConflict) {
+			t.Fatalf("unexpected %d: %s", r.res.Status, r.res.Body)
 		}
 	}
 	// Ranks stayed unique and every subtask followed its parent into the sprint.
@@ -75,7 +81,8 @@ func TestConcurrentIssueWritesDoNotDeadlock(t *testing.T) {
 // TestStatusDeleteRacesIssueWrites deletes columns while other requests move issues into
 // them. Issue writes key-share-lock the target status and DeleteStatus locks it for update
 // before moving its issues, so each write either lands before the delete (and its issue is
-// moved to moveTo) or finds the status gone (400 on statusId) — never a foreign-key 500.
+// moved to moveTo) or finds the status gone (400 on statusId) — never a foreign-key
+// violation (a 409 from httpx's backstop).
 func TestStatusDeleteRacesIssueWrites(t *testing.T) {
 	e := newTestEnv(t)
 	u := e.createUser("Owner")
@@ -281,8 +288,9 @@ func TestStatusPatchRacesSprintCompletion(t *testing.T) {
 
 // TestReparentRacesSprintCompletion (BL-2): re-parenting a subtask onto an issue of the
 // sprint being completed used to lock the subtask first and the new parent second — the
-// reverse of completion's order — and deadlocked (500). Issue writes now take the project
-// lock first, like sprint lifecycle changes.
+// reverse of completion's order — and deadlocked (answered 409 conflict, see
+// httpx.clientErrorForDB). Issue writes now take the project lock first, like sprint
+// lifecycle changes.
 func TestReparentRacesSprintCompletion(t *testing.T) {
 	e := newTestEnv(t)
 	u := e.createUser("Owner")
@@ -374,8 +382,8 @@ func TestStatusCategoryChangeRacesIssueWrite(t *testing.T) {
 }
 
 // TestWritesRacingDeletesAreClientErrors (BL-7): a write referencing a row that another
-// transaction is deleting waits for the delete, then answers 404 / 400 — never a 500 from a
-// foreign-key violation or an UPDATE that found no row.
+// transaction is deleting waits for the delete, then answers 404 / 400 — never a 409 from a
+// foreign-key violation or a 500 from an UPDATE that found no row.
 func TestWritesRacingDeletesAreClientErrors(t *testing.T) {
 	e := newTestEnv(t)
 	u := e.createUser("Owner")

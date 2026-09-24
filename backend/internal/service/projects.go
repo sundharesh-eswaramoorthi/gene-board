@@ -73,7 +73,7 @@ func projectView(ctx context.Context, q *db.Queries, userID, projectID int64) (d
 // admin and lead.
 func (s *Service) CreateProject(ctx context.Context, userID int64, in CreateProjectInput) (dto.Project, error) {
 	key := normalizeProjectKey(in.Key)
-	name := strings.TrimSpace(in.Name)
+	name := cleanName(in.Name)
 	description := strings.TrimSpace(in.Description)
 	projectType := strings.ToLower(strings.TrimSpace(in.Type))
 	if projectType == "" {
@@ -136,11 +136,7 @@ func (s *Service) UpdateProject(ctx context.Context, userID int64, key string, i
 		if err != nil {
 			return err
 		}
-		if err := t.q.LockProject(ctx, acc.project.ID); err != nil {
-			return fmt.Errorf("lock project: %w", err)
-		}
-		// Re-read under the lock (the caller's role may have changed meanwhile, too).
-		if acc, err = s.projectByID(ctx, t.q, userID, acc.project.ID, RoleAdmin); err != nil {
+		if acc, err = s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleAdmin); err != nil {
 			return err
 		}
 		p := acc.project
@@ -151,7 +147,7 @@ func (s *Service) UpdateProject(ctx context.Context, userID int64, key string, i
 			if in.Name.Null {
 				fe.Add("name", "must not be null")
 			} else {
-				next.Name = strings.TrimSpace(in.Name.Value)
+				next.Name = cleanName(in.Name.Value)
 				checkLength(&fe, "name", next.Name, 1, maxProjectName)
 			}
 		}
@@ -192,19 +188,39 @@ func (s *Service) UpdateProject(ctx context.Context, userID int64, key string, i
 	return out, err
 }
 
-// DeleteProject deletes a project and everything in it (admin only).
+// DeleteProject deletes a project and everything in it (admin only). Issues of other
+// projects that were linked to its issues lose those links, so their projects are notified.
 func (s *Service) DeleteProject(ctx context.Context, userID int64, key string) error {
 	return s.inTx(ctx, func(t *txn) error {
 		acc, err := s.projectByKey(ctx, t.q, userID, key, RoleAdmin)
 		if err != nil {
 			return err
 		}
+		if acc, err = s.lockProjectAs(ctx, t, userID, acc.project.ID, RoleAdmin); err != nil {
+			return err
+		}
+		unlinked, err := t.q.ListCrossProjectLinkedIssues(ctx, db.ListCrossProjectLinkedIssuesParams{ProjectID: acc.project.ID})
+		if err != nil {
+			return fmt.Errorf("list cross-project links: %w", err)
+		}
 		if err := t.q.DeleteProject(ctx, acc.project.ID); err != nil {
 			return fmt.Errorf("delete project: %w", err)
 		}
 		t.publish(acc.project.ID, realtime.ProjectChanged, acc.project.Key, "", userID)
+		publishUnlinked(t, unlinked, userID)
 		return nil
 	})
+}
+
+// lockProjectAs takes the project row lock (LockProject) and re-reads the project and the
+// caller's role under it, checking min again. Writes check access before they wait for the
+// lock, and a change holding it may meanwhile have demoted or removed the caller, switched
+// the project's type or deleted the project (404): callers must work from the returned row.
+func (s *Service) lockProjectAs(ctx context.Context, t *txn, userID, projectID int64, min Role) (projectAccess, error) {
+	if err := t.q.LockProject(ctx, projectID); err != nil {
+		return projectAccess{}, fmt.Errorf("lock project: %w", err)
+	}
+	return s.projectByID(ctx, t.q, userID, projectID, min)
 }
 
 // requireMember returns a validation error on field unless userID belongs to the project.

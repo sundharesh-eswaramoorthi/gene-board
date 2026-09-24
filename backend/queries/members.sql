@@ -8,14 +8,15 @@ RETURNING *;
 -- name: GetMember :one
 SELECT * FROM project_members WHERE project_id = $1 AND user_id = $2;
 
--- ListMemberViews returns members with their user data ordered by name (optionally one user).
+-- ListMemberViews returns members with their user data ordered by name (optionally one user),
+-- in the Unicode root collation like every name-ordered list (see labels.sql).
 -- name: ListMemberViews :many
 SELECT pm.user_id, pm.role, pm.created_at, u.name, u.email
 FROM project_members pm
 JOIN users u ON u.id = pm.user_id
 WHERE pm.project_id = @project_id
   AND (sqlc.narg(user_id)::bigint IS NULL OR pm.user_id = sqlc.narg(user_id)::bigint)
-ORDER BY lower(u.name), u.id;
+ORDER BY lower(u.name) COLLATE "und-x-icu", u.id;
 
 -- name: UpdateMemberRole :exec
 UPDATE project_members SET role = $3 WHERE project_id = $1 AND user_id = $2;
@@ -31,6 +32,9 @@ SELECT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1 AND user_id =
 
 -- name: ListMemberProjectIDs :many
 SELECT project_id FROM project_members WHERE user_id = $1;
+
+-- name: ListMemberProjectKeys :many
+SELECT p.key FROM project_members pm JOIN projects p ON p.id = pm.project_id WHERE pm.user_id = $1;
 
 -- LogUnassignMemberIssues records an assignee change for every issue about to be
 -- unassigned by UnassignMemberIssues. Run it first.

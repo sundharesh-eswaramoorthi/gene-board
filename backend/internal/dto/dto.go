@@ -231,6 +231,10 @@ type Board struct {
 	Statuses []Status `json:"statuses"` // columns, by position
 	Sprint   *Sprint  `json:"sprint"`   // the active sprint (Scrum); always null for Kanban
 	Issues   []Issue  `json:"issues"`
+	// Parents are the parents of subtasks in Issues that are not on the board themselves (a
+	// Kanban board hides long-resolved issues), so clients can still find a subtask's epic.
+	// They are never shown as cards. By id.
+	Parents []Issue `json:"parents"`
 }
 
 // BacklogSprint is one sprint section of the backlog page.

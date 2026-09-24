@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate } from 'react-router'
 import { useStartSprint, useUpdateSprint } from '@/api/sprints'
-import type { Sprint, UpdateSprintInput } from '@/api/types'
+import type { Sprint, StartSprintInput, UpdateSprintInput } from '@/api/types'
 import { Button, Dialog, Field, Input, Select, Textarea, toast, toastError } from '@/components/ui'
 import { formatDateRange } from '@/lib/dates'
 import { fieldErrors } from '@/lib/errors'
@@ -151,7 +151,10 @@ export interface SprintDialogProps {
   onClose: () => void
 }
 
-/** Start sprint: name, goal, start date (default today), 1–4 week presets or a custom end date. */
+/**
+ * Start sprint: name, goal, start date (default today), 1–4 week presets or a custom end date.
+ * Sends the name and goal only when they were changed.
+ */
 export function StartSprintDialog({ projectKey, sprint, issueCount, onClose }: SprintDialogProps) {
   const navigate = useNavigate()
   const start = useStartSprint(projectKey)
@@ -160,9 +163,15 @@ export function StartSprintDialog({ projectKey, sprint, issueCount, onClose }: S
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!form.check()) return
-    const { name, goal, startDate, endDate } = form.values
+    const { startDate, endDate } = form.values
+    const name = form.values.name.trim()
+    const goal = form.values.goal.trim()
+    // Name and goal only when changed here, so a teammate's rename meanwhile is kept.
+    const input: StartSprintInput = { startDate, endDate }
+    if (name !== sprint.name) input.name = name
+    if (goal !== sprint.goal) input.goal = goal
     try {
-      const started = await start.mutateAsync({ id: sprint.id, startDate, endDate, name: name.trim(), goal: goal.trim() })
+      const started = await start.mutateAsync({ id: sprint.id, ...input })
       toast.success(`${started.name} started`, {
         action: { label: 'View board', onClick: () => navigate(`/projects/${projectKey}/board`) },
       })

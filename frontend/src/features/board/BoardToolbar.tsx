@@ -21,6 +21,7 @@ import { pluralize } from '@/lib/format'
 import { ISSUE_TYPE_META } from '@/lib/issueMeta'
 import {
   BOARD_ISSUE_TYPES,
+  pruneFilters,
   toggleValue,
   type AssigneeFilterValue,
   type BoardFilterOptions,
@@ -48,7 +49,10 @@ export interface BoardToolbarProps {
  * Board quick filters (client-side): text search, assignee avatars (+ Unassigned), only my
  * issues, type, epic, hide subtasks and "Clear filters".
  */
-export function BoardToolbar({ filters, options, onChange, onClear, active, shownCount, totalCount }: BoardToolbarProps) {
+export function BoardToolbar({ filters: stored, options, onChange, onClear, active, shownCount, totalCount }: BoardToolbarProps) {
+  // Selected epics and people no longer on the board have no control here and the board ignores
+  // them (useBoardView), so counts and toggles leave them out too: the next toggle drops them.
+  const filters = pruneFilters(stored, options)
   return (
     <div role="toolbar" aria-label="Board filters" className="flex flex-wrap items-center gap-x-2 gap-y-2">
       <SearchInput

@@ -261,3 +261,38 @@ func TestSeedCreatesDemoDataOnce(t *testing.T) {
 		t.Fatalf("second run changed the data (%d users)", n)
 	}
 }
+
+// TestSeedIfEmpty: `seed --if-empty` (run by `make up` on every start) loads the demo data
+// into a new database, but never into one that already has users — e.g. one whose own
+// project uses the key GB, where the seed would fail halfway.
+func TestSeedIfEmpty(t *testing.T) {
+	resetDatabase(t)
+	ctx := context.Background()
+	svc := service.New(service.Options{
+		Pool:   testPool,
+		Tokens: auth.NewTokens("seed-test", time.Hour),
+		Hasher: auth.NewPasswordHasher(bcrypt.MinCost),
+		Logger: discard,
+	})
+	owner, err := svc.Register(ctx, service.RegisterInput{Email: "owner@example.com", Name: "Owner", Password: DemoPassword})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateProject(ctx, owner.User.ID, service.CreateProjectInput{Key: "GB", Name: "Our own", Type: dto.ProjectTypeKanban}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunIfEmpty(ctx, svc, testPool, discard); err != nil {
+		t.Fatalf("seed a database in use: %v", err)
+	}
+	if users, projects := count(t, `SELECT count(*) FROM users`), count(t, `SELECT count(*) FROM projects`); users != 1 || projects != 1 {
+		t.Fatalf("a database in use got demo data: %d users, %d projects", users, projects)
+	}
+
+	resetDatabase(t)
+	if err := RunIfEmpty(ctx, svc, testPool, discard); err != nil {
+		t.Fatalf("seed an empty database: %v", err)
+	}
+	if n := count(t, `SELECT count(*) FROM users WHERE email = $1`, DemoEmail); n != 1 {
+		t.Fatal("an empty database got no demo data")
+	}
+}

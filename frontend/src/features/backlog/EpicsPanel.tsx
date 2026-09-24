@@ -48,7 +48,7 @@ export function EpicsPanel({ projectKey, value, onChange, onClose, canEdit }: Ep
         ))}
       </div>
     )
-  } else if (epics.isError) {
+  } else if (epics.isLoadingError) {
     list = <ErrorState size="sm" error={epics.error} title="Couldn’t load epics" onRetry={() => void epics.refetch()} />
   } else if (all.length === 0) {
     list = (

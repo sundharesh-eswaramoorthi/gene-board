@@ -65,7 +65,7 @@ export function LabelsTab({ project, isAdmin, canEdit }: LabelsTabProps) {
       >
         {labels.isPending ? (
           <SkeletonRows rows={4} className="border-t border-border" />
-        ) : labels.isError ? (
+        ) : labels.isLoadingError ? (
           <ErrorState size="sm" error={labels.error} title="Couldn’t load labels" onRetry={() => void labels.refetch()} />
         ) : list.length === 0 ? (
           <EmptyState

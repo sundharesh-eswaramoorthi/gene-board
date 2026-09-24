@@ -3,9 +3,21 @@ export function pluralize(count: number, singular: string, plural = `${singular}
   return `${count} ${count === 1 ? singular : plural}`
 }
 
-/** Truncate to `max` characters with an ellipsis. */
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+/**
+ * The characters of `text` as a reader sees them (grapheme clusters): an emoji, a flag or a
+ * letter with accents is one item, never cut in half the way UTF-16 indexing would.
+ */
+export function splitGraphemes(text: string): string[] {
+  return Array.from(graphemes.segment(text), (s) => s.segment)
+}
+
+/** Truncate to `max` characters with an ellipsis (whole characters: an emoji is never split). */
 export function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1)).trimEnd()}…`
+  if (text.length <= max) return text // fast path: never more characters than UTF-16 units
+  const chars = splitGraphemes(text)
+  return chars.length <= max ? text : `${chars.slice(0, Math.max(0, max - 1)).join('').trimEnd()}…`
 }
 
 /** Absolute URL of an issue's full page (for "copy link"). */

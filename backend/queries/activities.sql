@@ -2,31 +2,40 @@
 -- map their rows with one function.
 
 -- name: CreateActivity :exec
-INSERT INTO activities (project_id, issue_id, issue_key, actor_id, action, field, old_value, new_value)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+INSERT INTO activities (project_id, issue_id, issue_key, actor_id, action, field, old_value, new_value, comment_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
 
+-- The list queries return, as comment_preview, the start of the current body of a
+-- comment.created row's comment ('' for other rows, and once the comment or its issue is
+-- deleted): text edited out of a comment, or deleted with it, never stays in the history.
 -- name: ListIssueActivities :many
-SELECT sqlc.embed(a), p.key AS project_key, u.name AS actor_name, u.email AS actor_email
+SELECT sqlc.embed(a), p.key AS project_key, u.name AS actor_name, u.email AS actor_email,
+       COALESCE(left(c.body, @comment_preview_len::int), '')::text AS comment_preview
 FROM activities a
 JOIN projects p ON p.id = a.project_id
 LEFT JOIN users u ON u.id = a.actor_id
+LEFT JOIN comments c ON c.id = a.comment_id
 WHERE a.issue_id = @issue_id::bigint
 ORDER BY a.created_at DESC, a.id DESC;
 
 -- name: ListProjectActivities :many
-SELECT sqlc.embed(a), p.key AS project_key, u.name AS actor_name, u.email AS actor_email
+SELECT sqlc.embed(a), p.key AS project_key, u.name AS actor_name, u.email AS actor_email,
+       COALESCE(left(c.body, @comment_preview_len::int), '')::text AS comment_preview
 FROM activities a
 JOIN projects p ON p.id = a.project_id
 LEFT JOIN users u ON u.id = a.actor_id
+LEFT JOIN comments c ON c.id = a.comment_id
 WHERE a.project_id = @project_id
 ORDER BY a.created_at DESC, a.id DESC
 LIMIT @max_results::int OFFSET @skip::bigint;
 
 -- name: ListUserFeedActivities :many
-SELECT sqlc.embed(a), p.key AS project_key, u.name AS actor_name, u.email AS actor_email
+SELECT sqlc.embed(a), p.key AS project_key, u.name AS actor_name, u.email AS actor_email,
+       COALESCE(left(c.body, @comment_preview_len::int), '')::text AS comment_preview
 FROM activities a
 JOIN projects p ON p.id = a.project_id
 LEFT JOIN users u ON u.id = a.actor_id
+LEFT JOIN comments c ON c.id = a.comment_id
 WHERE a.project_id IN (SELECT pm.project_id FROM project_members pm WHERE pm.user_id = @user_id)
 ORDER BY a.created_at DESC, a.id DESC
 LIMIT @max_results::int OFFSET @skip::bigint;

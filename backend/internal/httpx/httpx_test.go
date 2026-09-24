@@ -399,9 +399,20 @@ func TestRejectInvalidText(t *testing.T) {
 		"/api/issues?q=%FF":       http.StatusBadRequest,
 		"/api/issues?%00=x":       http.StatusBadRequest,
 		"/api/projects/G%00B":     http.StatusBadRequest,
+		// Malformed query strings are rejected, not read without the broken parameter.
+		"/api/issues?project=OPS&type=bug":   http.StatusNoContent,
+		"/api/issues?project=OPS%ZZ":         http.StatusBadRequest,
+		"/api/issues?project=OPS%":           http.StatusBadRequest,
+		"/api/issues?project=OPS&type=bug;x": http.StatusBadRequest,
+		"/api/issues?type=%FFbug%ZZ":         http.StatusBadRequest,
+		"/api/issues?%ZZ=x":                  http.StatusBadRequest,
 	} {
-		if w := serve(h, httptest.NewRequest(http.MethodGet, target, nil)); w.Code != want {
+		w := serve(h, httptest.NewRequest(http.MethodGet, target, nil))
+		if w.Code != want {
 			t.Errorf("%s: %d, want %d", target, w.Code, want)
+		}
+		if want == http.StatusBadRequest && !strings.Contains(w.Body.String(), `"bad_request"`) {
+			t.Errorf("%s: body %s, want the bad_request envelope", target, w.Body)
 		}
 	}
 }

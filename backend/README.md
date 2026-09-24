@@ -36,6 +36,7 @@ databases `geneboard` and `geneboard_test`).
 go run ./cmd/server              # migrate the dev DB, then serve on 127.0.0.1:8484
 go run ./cmd/server migrate      # only apply migrations
 go run ./cmd/server seed         # demo data (SPEC §6); does nothing if demo@geneboard.dev exists
+go run ./cmd/server seed --if-empty  # the same, only into a database without users (`make up`)
 go run ./cmd/server healthcheck  # exit 0 if the server on $BIND_HOST:$PORT answers /api/health
 ```
 
@@ -83,8 +84,10 @@ clients can pick their own throttling key.
 | `TRUSTED_PROXIES` | `127.0.0.0/8,::1/128`; container mode adds `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7`. Reverse proxies (IPs / CIDR prefixes, or `none`) whose `X-Real-IP` / `X-Forwarded-For` names the client for auth throttling |
 | `GB_CONTAINER` | unset; `1` in the image (see `BIND_HOST`, `JWT_SECRET`, `TRUSTED_PROXIES`) |
 
-The server shuts down gracefully on SIGINT/SIGTERM (in-flight requests finish, websocket
-subscriptions are closed through `Hub.Close`).
+The server shuts down gracefully on SIGINT/SIGTERM: in-flight requests get up to 15 s to
+finish (any still running then are cancelled, with a warning), and websocket subscriptions
+are closed through `Hub.Close`. The compose `api` service allows 20 s (`stop_grace_period`)
+before Docker kills the container.
 
 ## Checks
 

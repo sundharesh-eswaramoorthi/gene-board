@@ -137,7 +137,7 @@ export function MembersTab({ project, isAdmin }: MembersTabProps) {
       >
         {members.isPending ? (
           <SkeletonRows rows={4} className="border-t border-border" />
-        ) : members.isError ? (
+        ) : members.isLoadingError ? (
           <ErrorState size="sm" error={members.error} title="Couldn’t load members" onRetry={() => void members.refetch()} />
         ) : list.length === 0 ? (
           <EmptyState size="sm" icon={<UsersRound />} title="No members" />

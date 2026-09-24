@@ -116,7 +116,7 @@ type CreateLinkInput struct {
 // CreateLink links issueKey (outward side) to the target issue. The caller needs member
 // access to the source issue and at least viewer access to the target (which may be in
 // another project). "relates" links are symmetric, so the reverse link counts as a
-// duplicate.
+// duplicate (a unique index on the unordered pair also catches a concurrent reverse link).
 func (s *Service) CreateLink(ctx context.Context, userID int64, issueKey string, in CreateLinkInput) (dto.IssueLink, error) {
 	linkType := strings.ToLower(strings.TrimSpace(in.Type))
 	targetKey := normalizeIssueKey(in.TargetKey)
@@ -248,8 +248,12 @@ func (s *Service) DeleteLink(ctx context.Context, userID, linkID int64) error {
 		if err != nil {
 			return fmt.Errorf("load link target: %w", err)
 		}
-		if err := t.q.DeleteIssueLink(ctx, link.ID); err != nil {
+		deleted, err := t.q.DeleteIssueLink(ctx, link.ID)
+		if err != nil {
 			return fmt.Errorf("delete link: %w", err)
+		}
+		if deleted == 0 { // a concurrent delete removed (and logged) it first
+			return errLinkNotFound
 		}
 		desc := linkLabel(link.Type, DirectionOutward) + " " + dst.Key
 		if err := t.logActivity(ctx, userID, issueEntry(src.issue, ActionLinkDeleted).withValues("", nil, &desc)); err != nil {

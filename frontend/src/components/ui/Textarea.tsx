@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, type Ref, type TextareaHTMLAttributes } from 'react'
+import { charLimitProps } from '@/lib/chars'
 import { cn } from '@/lib/cn'
 import { useFieldControl } from './Field'
 import { controlClasses } from './Input'
@@ -9,6 +10,8 @@ export interface TextareaProps extends TextareaHTMLAttributes<HTMLTextAreaElemen
   autoResize?: boolean
   minRows?: number
   maxRows?: number
+  /** Longest value in characters, as the API counts them (an emoji is one, unlike the native attribute). */
+  maxLength?: number
   ref?: Ref<HTMLTextAreaElement>
 }
 
@@ -19,6 +22,8 @@ export function Textarea({
   maxRows = 20,
   className,
   onInput,
+  maxLength,
+  onChange,
   ref,
   ...rest
 }: TextareaProps) {
@@ -56,6 +61,7 @@ export function Textarea({
       }}
       className={cn(controlClasses, 'block px-2.5 py-1.5 text-sm leading-5', autoResize && 'resize-none', className)}
       {...props}
+      {...charLimitProps(maxLength, rest.value, onChange, rest)}
     />
   )
 }

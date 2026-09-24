@@ -43,7 +43,11 @@ export interface MarkdownEditorProps {
   onEscape?: () => void
   /** Hint after "Markdown supported", e.g. what ⌘+Enter does. */
   submitHint?: string
-  disabled?: boolean
+  /**
+   * A save is in flight: the text dims and turns read-only and the shortcuts pause. It stays
+   * focusable (a disabled textarea would drop keyboard focus, and not get it back on failure).
+   */
+  saving?: boolean
   id?: string
   'aria-label'?: string
   'data-testid'?: string
@@ -68,7 +72,7 @@ export function MarkdownEditor({
   onSubmit,
   onEscape,
   submitHint,
-  disabled = false,
+  saving = false,
   id,
   'aria-label': ariaLabel,
   'data-testid': testId,
@@ -92,7 +96,7 @@ export function MarkdownEditor({
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.nativeEvent.isComposing) return
+    if (e.nativeEvent.isComposing || saving) return
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && onSubmit) {
       e.preventDefault()
       onSubmit()
@@ -115,7 +119,7 @@ export function MarkdownEditor({
         className={cn(
           'overflow-hidden rounded-sm border border-border-strong bg-surface transition-[border-color,box-shadow]',
           'focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/25',
-          disabled && 'opacity-60',
+          saving && 'opacity-60',
         )}
       >
         <div className="flex items-center justify-between gap-2 border-b border-border bg-surface-sunken px-1.5 py-1">
@@ -143,7 +147,8 @@ export function MarkdownEditor({
           minRows={minRows}
           maxRows={maxRows}
           maxLength={maxLength}
-          disabled={disabled}
+          readOnly={saving}
+          aria-busy={saving || undefined}
           className="rounded-none border-0 bg-transparent px-3 py-2 shadow-none hover:border-0 focus-visible:border-0 focus-visible:ring-0"
         />
         {mode === 'preview' && (

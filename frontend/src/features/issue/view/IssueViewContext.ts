@@ -14,7 +14,7 @@ export interface IssueViewContextValue {
   isAdmin: boolean
   /** The issue is being deleted: its queries are paused and the view is inert. */
   deleting: boolean
-  /** Editors with unsaved drafts (the modal asks before closing); absent on the full page. */
+  /** Editors with unsaved drafts (the modal and the page ask before leaving). */
   unsavedEdits?: UnsavedEdits
 }
 

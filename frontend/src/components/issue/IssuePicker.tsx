@@ -30,6 +30,12 @@ export interface IssuePickerProps extends PickerCommonProps {
   allowNone?: boolean
   noneLabel?: string
   searchPlaceholder?: string
+  /**
+   * Name of the field the picker sets ("Epic", "Parent"): the trigger is announced as
+   * "Epic: GB-1 Checkout" (or "Epic: Select epic", the visible placeholder, when empty) rather
+   * than by its value alone. Ignored when `aria-label` is given.
+   */
+  fieldLabel?: string
 }
 
 /** Server-side issue search picker (key or text), e.g. for adding links. */
@@ -43,6 +49,7 @@ export function IssuePicker({
   allowNone = false,
   noneLabel = 'None',
   searchPlaceholder = 'Search by key or summary…',
+  fieldLabel,
   variant = 'field',
   disabled,
   placeholder = 'Select issue',
@@ -86,6 +93,7 @@ export function IssuePicker({
     return list
   }, [results.data, excludeIds, filter, allowNone, noneLabel])
 
+  const valueText = value ? `${value.key} ${value.summary}` : null
   const triggerEl = trigger ?? (
     <PickerTrigger
       variant={variant}
@@ -93,7 +101,7 @@ export function IssuePicker({
       className={className}
       id={id}
       data-testid={testId}
-      aria-label={ariaLabel ?? (value ? `${value.key} ${value.summary}` : placeholder)}
+      aria-label={ariaLabel ?? (fieldLabel ? `${fieldLabel}: ${valueText ?? placeholder}` : (valueText ?? placeholder))}
     >
       {value ? (
         <>
